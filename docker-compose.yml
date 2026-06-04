@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  water-channel-service:
+    build: .
+    container_name: water-channel-gate-system
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+    restart: unless-stopped

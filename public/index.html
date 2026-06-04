@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>渠道断面水力特性计算器</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>渠道断面水力特性交互计算器</h1>
+            <div class="scheme-bar">
+                <span class="label">方案列表:</span>
+                <div id="schemeList" class="scheme-list"></div>
+                <button id="saveSchemeBtn" class="btn btn-primary">保存方案</button>
+                <button id="exportBtn" class="btn btn-secondary">导出JSON</button>
+                <button id="importBtn" class="btn btn-secondary">导入JSON</button>
+                <input type="file" id="importFile" accept=".json" style="display: none;">
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="left-panel">
+                <div class="canvas-container">
+                    <canvas id="sectionCanvas" width="800" height="500"></canvas>
+                    <div id="errorMessage" class="error-message hidden">断面轮廓不合理</div>
+                </div>
+                
+                <div class="controls">
+                    <div class="preset-buttons">
+                        <span class="label">预设断面:</span>
+                        <button class="btn-preset" data-preset="trapezoid">梯形</button>
+                        <button class="btn-preset" data-preset="rectangle">矩形</button>
+                        <button class="btn-preset" data-preset="ushape">U形</button>
+                        <button class="btn-preset" data-preset="compound">复合断面</button>
+                        <button id="clearBtn" class="btn-preset btn-danger">清空</button>
+                    </div>
+                    
+                    <div class="scale-control">
+                        <label for="scaleInput">比例尺 (px/m):</label>
+                        <input type="number" id="scaleInput" value="50" min="10" max="200">
+                    </div>
+                </div>
+
+                <div class="depth-control">
+                    <label for="depthSlider">水深: <span id="depthValue">1.50</span> m</label>
+                    <input type="range" id="depthSlider" min="0" max="3" step="0.01" value="1.5">
+                </div>
+            </div>
+
+            <div class="right-panel">
+                <div class="params-panel">
+                    <h3>水力参数</h3>
+                    <div class="param-group">
+                        <label>糙率 n:</label>
+                        <input type="number" id="roughnessN" value="0.025" step="0.001" min="0.001">
+                    </div>
+                    <div class="param-group">
+                        <label>底坡 S:</label>
+                        <input type="number" id="slopeS" value="0.0003" step="0.0001" min="0">
+                    </div>
+                    <hr>
+                    <div class="param-result">
+                        <span class="param-label">过水面积 A:</span>
+                        <span class="param-value" id="areaValue">0.00</span>
+                        <span class="param-unit">m²</span>
+                    </div>
+                    <div class="param-result">
+                        <span class="param-label">湿周 P:</span>
+                        <span class="param-value" id="wettedPerimeterValue">0.00</span>
+                        <span class="param-unit">m</span>
+                    </div>
+                    <div class="param-result">
+                        <span class="param-label">水力半径 R:</span>
+                        <span class="param-value" id="hydraulicRadiusValue">0.00</span>
+                        <span class="param-unit">m</span>
+                    </div>
+                    <div class="param-result">
+                        <span class="param-label">水面宽度 T:</span>
+                        <span class="param-value" id="surfaceWidthValue">0.00</span>
+                        <span class="param-unit">m</span>
+                    </div>
+                    <div class="param-result highlight">
+                        <span class="param-label">流量 Q:</span>
+                        <span class="param-value" id="dischargeValue">0.00</span>
+                        <span class="param-unit">m³/s</span>
+                    </div>
+                </div>
+
+                <div class="rating-curve-container">
+                    <h3>水深-流量关系曲线 (Rating Curve)</h3>
+                    <canvas id="ratingCurveCanvas" width="400" height="400"></canvas>
+                    <div id="curveLegend" class="curve-legend"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="instructions">
+            <p><strong>使用说明:</strong> 点击画布添加顶点绘制断面轮廓，双击结束绘制。拖拽顶点可调整位置，右键删除顶点。</p>
+        </div>
+    </div>
+
+    <div id="saveModal" class="modal hidden">
+        <div class="modal-content">
+            <h3>保存方案</h3>
+            <input type="text" id="schemeName" placeholder="请输入方案名称">
+            <div class="modal-buttons">
+                <button id="confirmSaveBtn" class="btn btn-primary">确定</button>
+                <button id="cancelSaveBtn" class="btn btn-secondary">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
