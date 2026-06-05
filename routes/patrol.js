@@ -208,4 +208,65 @@ router.get('/anomalies/stats', (req, res) => {
   }
 });
 
+router.post('/reports', (req, res) => {
+  try {
+    const { taskId } = req.body;
+
+    if (!taskId) {
+      return res.status(400).json({ error: 'taskId 任务ID不能为空' });
+    }
+
+    const report = patrolService.generateReport(parseInt(taskId));
+    res.json(report);
+  } catch (err) {
+    console.error('Generate report error:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/reports/summary', (req, res) => {
+  try {
+    const summary = patrolService.getReportSummary();
+    res.json(summary);
+  } catch (err) {
+    console.error('Get report summary error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/reports/:taskId', (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const report = patrolService.getReportDetailByTaskId(parseInt(taskId));
+    
+    if (!report) {
+      return res.status(404).json({ error: '报告不存在' });
+    }
+    
+    res.json(report);
+  } catch (err) {
+    console.error('Get report detail error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/reports', (req, res) => {
+  try {
+    const { inspectorName, startTime, endTime, minScore, maxScore } = req.query;
+    const filters = {};
+    
+    if (inspectorName) filters.inspectorName = inspectorName;
+    if (startTime) filters.startTime = startTime;
+    if (endTime) filters.endTime = endTime;
+    if (minScore !== undefined) filters.minScore = minScore;
+    if (maxScore !== undefined) filters.maxScore = maxScore;
+
+    const result = patrolService.getReportList(filters);
+    res.json(result);
+  } catch (err) {
+    console.error('Get reports error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

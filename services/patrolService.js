@@ -594,6 +594,323 @@ function getAnomalyStats() {
   };
 }
 
+function calculateCompletionScore(completionRate) {
+  return Math.round(completionRate * 40);
+}
+
+function calculateSpeedScore(totalDistanceMeters, durationMinutes) {
+  if (durationMinutes <= 0 || totalDistanceMeters <= 0) return 0;
+  
+  const speedKmh = (totalDistanceMeters / 1000) / (durationMinutes / 60);
+  
+  if (speedKmh >= 2 && speedKmh <= 5) {
+    return 20;
+  } else if (speedKmh < 2) {
+    return Math.round((speedKmh / 2) * 20);
+  } else {
+    const excess = speedKmh - 5;
+    const penalty = Math.min(excess / 5, 1) * 20;
+    return Math.max(0, Math.round(20 - penalty));
+  }
+}
+
+function calculateAnomalyScore(anomalyCount) {
+  const maxAnomalies = 5;
+  const score = Math.min(anomalyCount, maxAnomalies) / maxAnomalies * 20;
+  return Math.round(score);
+}
+
+function calculateTimelinessScore(durationMinutes, estimatedDurationMinutes) {
+  if (estimatedDurationMinutes <= 0) return 20;
+  if (durationMinutes <= 0) return 0;
+  
+  if (durationMinutes <= estimatedDurationMinutes) {
+    return 20;
+  } else {
+    const excessRatio = (durationMinutes - estimatedDurationMinutes) / estimatedDurationMinutes;
+    const penalty = Math.min(excessRatio, 1) * 20;
+    return Math.max(0, Math.round(20 - penalty));
+  }
+}
+
+function calculateCheckpointStayDurations(signedCheckpoints, taskEndTime) {
+  const result = [];
+  
+  for (let i = 0; i < signedCheckpoints.length; i++) {
+    const current = signedCheckpoints[i];
+    const next = signedCheckpoints[i + 1];
+    
+    let stayDuration = 0;
+    if (next) {
+      stayDuration = Math.round((next.signed_at - current.signed_at) / 1000 / 60 * 100) / 100;
+    } else if (taskEndTime) {
+      stayDuration = Math.round((taskEndTime - current.signed_at) / 1000 / 60 * 100) / 100;
+    }
+    
+    result.push({
+      checkpoint_id: current.id,
+      order_index: current.order_index,
+      description: current.description,
+      canal_segment_id: current.canal_segment_id,
+      signed_at: current.signed_at,
+      stay_duration_minutes: stayDuration
+    });
+  }
+  
+  return result;
+}
+
+function generateReport(taskId) {
+  const id = parseInt(taskId);
+  if (!id || typeof id !== 'number') {
+    throw new Error('任务ID必须是数字');
+  }
+
+  const existingReport = prepare('SELECT * FROM patrol_reports WHERE task_id = ?').get(id);
+  if (existingReport) {
+    return getReportDetailByTaskId(id);
+  }
+
+  const task = prepare('SELECT * FROM patrol_tasks WHERE id = ?').get(id);
+  if (!task) {
+    throw new Error('任务不存在');
+  }
+
+  if (task.status !== 'completed' && task.status !== 'timeout') {
+    throw new Error('只有已完成或已超时的任务才能生成报告');
+  }
+
+  const route = prepare('SELECT * FROM patrol_routes WHERE id = ?').get(task.route_id);
+  if (!route) {
+    throw new Error('关联路线不存在');
+  }
+
+  const allCheckpoints = prepare(`
+    SELECT * FROM patrol_checkpoints 
+    WHERE route_id = ? 
+    ORDER BY order_index ASC
+  `).all(task.route_id);
+
+  const tracks = prepare(`
+    SELECT * FROM patrol_tracks 
+    WHERE task_id = ? 
+    ORDER BY timestamp ASC
+  `).all(id);
+
+  const signedIds = new Set(
+    tracks.filter(t => t.checkpoint_id !== null).map(t => t.checkpoint_id)
+  );
+
+  const signedCheckpoints = allCheckpoints
+    .filter(cp => signedIds.has(cp.id))
+    .map(cp => {
+      const signTrack = tracks.find(t => t.checkpoint_id === cp.id);
+      return {
+        ...cp,
+        signed_at: signTrack ? signTrack.timestamp : null
+      };
+    })
+    .sort((a, b) => a.signed_at - b.signed_at);
+
+  const totalDistance = geoUtils.calculateTotalDistance(
+    tracks.map(t => ({ latitude: t.latitude, longitude: t.longitude }))
+  );
+
+  const completionRate = allCheckpoints.length > 0 
+    ? signedCheckpoints.length / allCheckpoints.length 
+    : 0;
+
+  const anomalies = prepare('SELECT * FROM patrol_anomalies WHERE task_id = ?').all(id);
+  
+  const anomalyByType = {};
+  const anomalyBySeverity = {};
+  for (const a of anomalies) {
+    anomalyByType[a.type] = (anomalyByType[a.type] || 0) + 1;
+    anomalyBySeverity[a.severity] = (anomalyBySeverity[a.severity] || 0) + 1;
+  }
+
+  const startTime = task.start_time || task.planned_start_time;
+  const endTime = task.end_time || Date.now();
+  const durationMinutes = Math.round((endTime - startTime) / 1000 / 60 * 100) / 100;
+
+  const checkpointsDetail = calculateCheckpointStayDurations(signedCheckpoints, endTime);
+
+  const completionScore = calculateCompletionScore(completionRate);
+  const speedScore = calculateSpeedScore(totalDistance, durationMinutes);
+  const anomalyScore = calculateAnomalyScore(anomalies.length);
+  const timelinessScore = calculateTimelinessScore(durationMinutes, route.estimated_duration_minutes);
+  const qualityScore = completionScore + speedScore + anomalyScore + timelinessScore;
+
+  const now = Date.now();
+  const result = prepare(`
+    INSERT INTO patrol_reports (
+      task_id, inspector_name, route_name, route_id,
+      start_time, end_time, duration_minutes,
+      total_distance_meters, total_checkpoints, signed_checkpoints, completion_rate,
+      quality_score, completion_score, speed_score, anomaly_score, timeliness_score,
+      anomaly_total, anomaly_by_type, anomaly_by_severity, checkpoints_detail,
+      generated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id, task.inspector_name, route.name, task.route_id,
+    startTime, endTime, durationMinutes,
+    Math.round(totalDistance), allCheckpoints.length, signedCheckpoints.length, 
+    Math.round(completionRate * 10000) / 10000,
+    qualityScore, completionScore, speedScore, anomalyScore, timelinessScore,
+    anomalies.length, JSON.stringify(anomalyByType), JSON.stringify(anomalyBySeverity),
+    JSON.stringify(checkpointsDetail), now
+  );
+
+  return getReportDetail(result.lastInsertRowid);
+}
+
+function getReportDetail(reportId) {
+  const id = parseInt(reportId);
+  const report = prepare('SELECT * FROM patrol_reports WHERE id = ?').get(id);
+  if (!report) return null;
+
+  return formatReportDetail(report);
+}
+
+function getReportDetailByTaskId(taskId) {
+  const id = parseInt(taskId);
+  const report = prepare('SELECT * FROM patrol_reports WHERE task_id = ?').get(id);
+  if (!report) return null;
+
+  return formatReportDetail(report);
+}
+
+function formatReportDetail(report) {
+  const anomalies = prepare(`
+    SELECT pa.*, cs.name as segment_name 
+    FROM patrol_anomalies pa
+    LEFT JOIN canal_segments cs ON pa.segment_id = cs.id
+    WHERE pa.task_id = ?
+    ORDER BY pa.timestamp ASC
+  `).all(report.task_id);
+
+  return {
+    id: report.id,
+    task_id: report.task_id,
+    task_basic: {
+      inspector_name: report.inspector_name,
+      route_name: report.route_name,
+      route_id: report.route_id,
+      start_time: report.start_time,
+      end_time: report.end_time,
+      duration_minutes: report.duration_minutes
+    },
+    overview: {
+      total_distance_meters: report.total_distance_meters,
+      total_checkpoints: report.total_checkpoints,
+      signed_checkpoints: report.signed_checkpoints,
+      completion_rate: report.completion_rate
+    },
+    quality_score: {
+      total: report.quality_score,
+      completion_score: report.completion_score,
+      speed_score: report.speed_score,
+      anomaly_score: report.anomaly_score,
+      timeliness_score: report.timeliness_score
+    },
+    checkpoints_detail: report.checkpoints_detail ? JSON.parse(report.checkpoints_detail) : [],
+    anomaly_summary: {
+      total: report.anomaly_total,
+      by_type: report.anomaly_by_type ? JSON.parse(report.anomaly_by_type) : {},
+      by_severity: report.anomaly_by_severity ? JSON.parse(report.anomaly_by_severity) : {},
+      anomalies: anomalies
+    },
+    generated_at: report.generated_at
+  };
+}
+
+function getReportList(filters = {}) {
+  let sql = 'SELECT pr.* FROM patrol_reports pr WHERE 1=1 ';
+  const params = [];
+
+  if (filters.inspectorName) {
+    sql += 'AND pr.inspector_name = ? ';
+    params.push(filters.inspectorName);
+  }
+  if (filters.startTime) {
+    sql += 'AND pr.generated_at >= ? ';
+    params.push(parseInt(filters.startTime));
+  }
+  if (filters.endTime) {
+    sql += 'AND pr.generated_at <= ? ';
+    params.push(parseInt(filters.endTime));
+  }
+  if (filters.minScore !== undefined) {
+    sql += 'AND pr.quality_score >= ? ';
+    params.push(parseFloat(filters.minScore));
+  }
+  if (filters.maxScore !== undefined) {
+    sql += 'AND pr.quality_score <= ? ';
+    params.push(parseFloat(filters.maxScore));
+  }
+
+  sql += 'ORDER BY pr.generated_at DESC';
+
+  const reports = prepare(sql).all(...params);
+  
+  return {
+    total: reports.length,
+    reports: reports.map(r => ({
+      id: r.id,
+      task_id: r.task_id,
+      inspector_name: r.inspector_name,
+      route_name: r.route_name,
+      start_time: r.start_time,
+      end_time: r.end_time,
+      duration_minutes: r.duration_minutes,
+      total_distance_meters: r.total_distance_meters,
+      completion_rate: r.completion_rate,
+      quality_score: r.quality_score,
+      anomaly_total: r.anomaly_total,
+      generated_at: r.generated_at
+    }))
+  };
+}
+
+function getReportSummary() {
+  const totalReports = prepare('SELECT COUNT(*) as count FROM patrol_reports').get().count;
+  
+  if (totalReports === 0) {
+    return {
+      total_reports: 0,
+      average_score: 0,
+      average_completion_rate: 0,
+      top_high_anomaly_segments: []
+    };
+  }
+
+  const avgStats = prepare(`
+    SELECT 
+      AVG(quality_score) as avg_score,
+      AVG(completion_rate) as avg_completion
+    FROM patrol_reports
+  `).get();
+
+  const segmentAnomalies = prepare(`
+    SELECT 
+      cs.id as segment_id,
+      cs.name as segment_name,
+      COUNT(pa.id) as anomaly_count
+    FROM canal_segments cs
+    LEFT JOIN patrol_anomalies pa ON cs.id = pa.segment_id
+    GROUP BY cs.id, cs.name
+    ORDER BY anomaly_count DESC
+    LIMIT 3
+  `).all();
+
+  return {
+    total_reports: totalReports,
+    average_score: Math.round(avgStats.avg_score * 100) / 100,
+    average_completion_rate: Math.round(avgStats.avg_completion * 10000) / 10000,
+    top_high_anomaly_segments: segmentAnomalies.filter(s => s.anomaly_count > 0)
+  };
+}
+
 module.exports = {
   createRoute,
   getRouteList,
@@ -606,5 +923,10 @@ module.exports = {
   getAnomalyList,
   getAnomalyStats,
   findNearestSegment,
-  findNearbyMeasurementPoint
+  findNearbyMeasurementPoint,
+  generateReport,
+  getReportDetail,
+  getReportDetailByTaskId,
+  getReportList,
+  getReportSummary
 };

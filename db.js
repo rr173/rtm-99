@@ -282,6 +282,41 @@ async function initDatabase() {
       ON patrol_anomalies(severity);
     CREATE INDEX IF NOT EXISTS idx_patrol_anomalies_time
       ON patrol_anomalies(timestamp);
+
+    CREATE TABLE IF NOT EXISTS patrol_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL UNIQUE,
+      inspector_name TEXT NOT NULL,
+      route_name TEXT NOT NULL,
+      route_id INTEGER NOT NULL,
+      start_time INTEGER,
+      end_time INTEGER,
+      duration_minutes REAL,
+      total_distance_meters REAL NOT NULL DEFAULT 0,
+      total_checkpoints INTEGER NOT NULL DEFAULT 0,
+      signed_checkpoints INTEGER NOT NULL DEFAULT 0,
+      completion_rate REAL NOT NULL DEFAULT 0,
+      quality_score REAL NOT NULL DEFAULT 0,
+      completion_score REAL NOT NULL DEFAULT 0,
+      speed_score REAL NOT NULL DEFAULT 0,
+      anomaly_score REAL NOT NULL DEFAULT 0,
+      timeliness_score REAL NOT NULL DEFAULT 0,
+      anomaly_total INTEGER NOT NULL DEFAULT 0,
+      anomaly_by_type TEXT,
+      anomaly_by_severity TEXT,
+      checkpoints_detail TEXT,
+      generated_at INTEGER NOT NULL,
+      FOREIGN KEY (task_id) REFERENCES patrol_tasks(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_patrol_reports_task
+      ON patrol_reports(task_id);
+    CREATE INDEX IF NOT EXISTS idx_patrol_reports_inspector
+      ON patrol_reports(inspector_name);
+    CREATE INDEX IF NOT EXISTS idx_patrol_reports_score
+      ON patrol_reports(quality_score);
+    CREATE INDEX IF NOT EXISTS idx_patrol_reports_generated
+      ON patrol_reports(generated_at);
   `);
   
   saveDatabase();
