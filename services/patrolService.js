@@ -64,8 +64,8 @@ function createRoute(name, estimatedDurationMinutes, checkpoints) {
       checkpoints[i + 1].latitude, checkpoints[i + 1].longitude
     );
     
-    if (distance < 10) {
-      throw new Error(`第${i + 1}个和第${i + 2}个巡检点距离过近(${Math.round(distance)}m)，相邻点间距至少需要10米`);
+    if (distance < 2) {
+      throw new Error(`第${i + 1}个和第${i + 2}个巡检点距离过近(${Math.round(distance)}m)，相邻点间距至少需要2米`);
     }
     if (distance > 10000) {
       throw new Error(`第${i + 1}个和第${i + 2}个巡检点距离过远(${Math.round(distance)}m)，相邻点间距不能超过10公里`);
@@ -303,11 +303,41 @@ function checkTaskTimeout(taskId, timestamp) {
   }
 }
 
+function getTaskList() {
+  const tasks = prepare('SELECT * FROM patrol_tasks ORDER BY created_at DESC').all();
+  const now = Date.now();
+
+  for (const task of tasks) {
+    if (task.status === 'in_progress') {
+      checkTaskTimeout(task.id, now);
+      task.status = prepare('SELECT status FROM patrol_tasks WHERE id = ?').get(task.id).status;
+    }
+
+    const route = prepare('SELECT name, estimated_duration_minutes FROM patrol_routes WHERE id = ?').get(task.route_id);
+    task.route_name = route ? route.name : '路线已删除';
+
+    const checkpointCount = prepare('SELECT COUNT(*) as count FROM patrol_checkpoints WHERE route_id = ?').get(task.route_id);
+    const signedCount = prepare('SELECT COUNT(DISTINCT checkpoint_id) as count FROM patrol_tracks WHERE task_id = ? AND checkpoint_id IS NOT NULL').get(task.id);
+    task.total_checkpoints = checkpointCount ? checkpointCount.count : 0;
+    task.signed_checkpoints_count = signedCount ? signedCount.count : 0;
+    task.progress_percent = task.total_checkpoints > 0 
+      ? Math.round((task.signed_checkpoints_count / task.total_checkpoints) * 10000) / 100
+      : 0;
+  }
+
+  return tasks;
+}
+
 function getTaskDetail(taskId) {
   const id = parseInt(taskId);
   const task = prepare('SELECT * FROM patrol_tasks WHERE id = ?').get(id);
   if (!task) {
     return null;
+  }
+
+  if (task.status === 'in_progress') {
+    checkTaskTimeout(task.id, Date.now());
+    Object.assign(task, prepare('SELECT * FROM patrol_tasks WHERE id = ?').get(id));
   }
 
   const route = prepare('SELECT * FROM patrol_routes WHERE id = ?').get(task.route_id);
@@ -351,12 +381,6 @@ function getTaskDetail(taskId) {
     ? Math.round((signedCheckpoints.length / allCheckpoints.length) * 10000) / 100
     : 0;
 
-  let isTimeout = task.status === 'timeout';
-  if (task.status === 'in_progress' && task.start_time) {
-    const timeoutMs = route.estimated_duration_minutes * 60 * 1000 * TIMEOUT_MULTIPLIER;
-    isTimeout = (Date.now() - task.start_time) > timeoutMs;
-  }
-
   return {
     ...task,
     route_name: route.name,
@@ -365,7 +389,7 @@ function getTaskDetail(taskId) {
     unsigned_checkpoints: unsignedCheckpoints,
     progress_percent: progress,
     total_distance_meters: Math.round(totalDistance),
-    is_timeout: isTimeout,
+    is_timeout: task.status === 'timeout',
     track_count: tracks.length
   };
 }
@@ -578,6 +602,7 @@ module.exports = {
   getRouteList,
   getRouteDetail,
   createTask,
+  getTaskList,
   reportTrack,
   getTaskDetail,
   reportAnomaly,

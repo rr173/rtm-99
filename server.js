@@ -115,7 +115,8 @@ async function startServer() {
       console.log('  GET  /api/patrol/routes - 巡检路线列表');
       console.log('  GET  /api/patrol/routes/:id - 路线详情');
       console.log('  POST /api/patrol/tasks - 创建巡检任务');
-      console.log('  GET  /api/patrol/tasks/:id - 任务详情');
+      console.log('  GET  /api/patrol/tasks - 巡检任务列表(含超时自动检测)');
+      console.log('  GET  /api/patrol/tasks/:id - 任务详情(含超时自动检测)');
       console.log('  POST /api/patrol/tracks - 上报轨迹点');
       console.log('  POST /api/patrol/anomalies - 上报异常');
       console.log('  GET  /api/patrol/anomalies - 异常列表');

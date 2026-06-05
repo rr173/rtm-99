@@ -8,7 +8,17 @@ function toDegrees(radians) {
   return radians * 180 / Math.PI;
 }
 
+function isValidCoordinate(lat, lon) {
+  return typeof lat === 'number' && !isNaN(lat) && isFinite(lat) &&
+         typeof lon === 'number' && !isNaN(lon) && isFinite(lon) &&
+         lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+}
+
 function haversineDistance(lat1, lon1, lat2, lon2) {
+  if (!isValidCoordinate(lat1, lon1) || !isValidCoordinate(lat2, lon2)) {
+    return Infinity;
+  }
+
   const dLat = toRadians(lat2 - lat1);
   const dLon = toRadians(lon2 - lon1);
   
@@ -22,6 +32,12 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
 }
 
 function pointToSegmentDistance(pointLat, pointLon, segStartLat, segStartLon, segEndLat, segEndLon) {
+  if (!isValidCoordinate(pointLat, pointLon) ||
+      !isValidCoordinate(segStartLat, segStartLon) ||
+      !isValidCoordinate(segEndLat, segEndLon)) {
+    return Infinity;
+  }
+
   const R = EARTH_RADIUS_METERS;
   
   const phi1 = toRadians(segStartLat);
@@ -105,6 +121,7 @@ module.exports = {
   haversineDistance,
   pointToSegmentDistance,
   calculateTotalDistance,
+  isValidCoordinate,
   toRadians,
   toDegrees
 };

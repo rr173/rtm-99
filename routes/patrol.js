@@ -86,6 +86,19 @@ router.post('/tasks', (req, res) => {
   }
 });
 
+router.get('/tasks', (req, res) => {
+  try {
+    const tasks = patrolService.getTaskList();
+    res.json({
+      total: tasks.length,
+      tasks: tasks
+    });
+  } catch (err) {
+    console.error('Get tasks error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/tasks/:id', (req, res) => {
   try {
     const { id } = req.params;

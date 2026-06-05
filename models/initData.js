@@ -350,7 +350,8 @@ function initGeoCoordinates() {
 
   global.segmentCoordinates = {};
   for (const seg of segments) {
-    if (seg.start_latitude !== null && seg.start_longitude !== null) {
+    if (seg.start_latitude !== null && seg.start_longitude !== null &&
+        seg.end_latitude !== null && seg.end_longitude !== null) {
       global.segmentCoordinates[seg.id] = {
         start_lat: seg.start_latitude,
         start_lon: seg.start_longitude,
