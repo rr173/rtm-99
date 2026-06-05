@@ -467,6 +467,11 @@ function initDemoEmergencyPlans() {
   console.log('演示预案初始化完成: 2条应急预案');
 }
 
+function initLinkMonitorDemoData() {
+  const linkMonitorService = require('../services/linkMonitorService');
+  linkMonitorService.initLinkMonitorData();
+}
+
 module.exports = {
   initDemoTopology,
   generateHistoricalData,
@@ -474,6 +479,7 @@ module.exports = {
   initGeoCoordinates,
   initDemoPatrolRoute,
   initDemoEmergencyPlans,
+  initLinkMonitorDemoData,
   demoCanalSegments,
   demoGates
 };

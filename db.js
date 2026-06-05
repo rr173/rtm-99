@@ -425,6 +425,38 @@ async function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_emergency_exec_actions_exec ON emergency_execution_actions(execution_id);
+
+    CREATE TABLE IF NOT EXISTS link_monitor_heartbeats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      point_id TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      source TEXT NOT NULL DEFAULT 'rtu' CHECK(source IN ('rtu', 'heartbeat', 'simulated'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_link_monitor_heartbeats_point ON link_monitor_heartbeats(point_id);
+    CREATE INDEX IF NOT EXISTS idx_link_monitor_heartbeats_time ON link_monitor_heartbeats(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_link_monitor_heartbeats_point_time ON link_monitor_heartbeats(point_id, timestamp);
+
+    CREATE TABLE IF NOT EXISTS link_monitor_diagnostics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      point_id TEXT NOT NULL,
+      diagnosis_time INTEGER NOT NULL,
+      window_hours INTEGER NOT NULL DEFAULT 6,
+      packet_loss_rate REAL NOT NULL DEFAULT 0,
+      jump_count INTEGER NOT NULL DEFAULT 0,
+      jump_details TEXT,
+      stuck_duration_seconds INTEGER NOT NULL DEFAULT 0,
+      stuck_periods TEXT,
+      out_of_bounds_count INTEGER NOT NULL DEFAULT 0,
+      out_of_bounds_details TEXT,
+      std_dev REAL NOT NULL DEFAULT 0,
+      noise_level TEXT NOT NULL DEFAULT 'normal',
+      quality_score REAL NOT NULL DEFAULT 0,
+      link_status TEXT NOT NULL DEFAULT 'unknown'
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_link_monitor_diagnostics_point ON link_monitor_diagnostics(point_id);
+    CREATE INDEX IF NOT EXISTS idx_link_monitor_diagnostics_time ON link_monitor_diagnostics(diagnosis_time);
   `);
   
   saveDatabase();

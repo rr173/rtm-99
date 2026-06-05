@@ -16,8 +16,9 @@ const siltationRoutes = require('./routes/siltation');
 const patrolRoutes = require('./routes/patrol');
 const waterBalanceRoutes = require('./routes/waterBalance');
 const emergencyRoutes = require('./routes/emergency');
+const linkMonitorRoutes = require('./routes/linkMonitor');
 const waterBalanceService = require('./services/waterBalanceService');
-const { initDemoEmergencyPlans } = require('./models/initData');
+const { initDemoEmergencyPlans, initLinkMonitorDemoData } = require('./models/initData');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -52,6 +53,7 @@ app.use('/api/siltation', siltationRoutes);
 app.use('/api/patrol', patrolRoutes);
 app.use('/api/water-balance', waterBalanceRoutes);
 app.use('/api/emergency', emergencyRoutes);
+app.use('/api/link-monitor', linkMonitorRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -95,6 +97,9 @@ async function startServer() {
     
     console.log('正在初始化应急预案演示数据...');
     initDemoEmergencyPlans();
+    
+    console.log('正在初始化链路监控数据...');
+    initLinkMonitorDemoData();
     
     app.listen(PORT, () => {
       console.log('========================================');
@@ -153,6 +158,15 @@ async function startServer() {
       console.log('  POST /api/emergency/execute/:planId - 执行预案');
       console.log('  GET  /api/emergency/executions - 执行记录列表');
       console.log('  GET  /api/emergency/executions/:id - 执行详情');
+      console.log('');
+      console.log('链路监控接口:');
+      console.log('  GET  /api/link-monitor/status - 所有测点链路状态');
+      console.log('  GET  /api/link-monitor/status/:pointId - 单测点链路详情');
+      console.log('  POST /api/link-monitor/heartbeat - 批量上报心跳包');
+      console.log('  GET  /api/link-monitor/quality - 所有测点质量评分');
+      console.log('  GET  /api/link-monitor/quality/:pointId - 单测点数据质量诊断');
+      console.log('  GET  /api/link-monitor/report - 链路健康日报');
+      console.log('  POST /api/link-monitor/simulate-outage - 模拟测点离线');
       console.log('');
     });
   } catch (err) {
