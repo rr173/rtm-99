@@ -1,7 +1,6 @@
 const { prepare, saveDatabase } = require('../db');
 const hydraulicEngine = require('./hydraulicEngine');
 const siltationService = require('./siltationService');
-const stateManager = require('./stateManager');
 
 function trapezoidalIntegral(timeSeries) {
   if (!timeSeries || timeSeries.length < 2) {
@@ -12,10 +11,10 @@ function trapezoidalIntegral(timeSeries) {
   for (let i = 1; i < timeSeries.length; i++) {
     const prev = timeSeries[i - 1];
     const curr = timeSeries[i];
-    const dtHours = (curr.timestamp - prev.timestamp) / (1000 * 3600);
-    if (dtHours > 0) {
+    const dtSeconds = (curr.timestamp - prev.timestamp) / 1000;
+    if (dtSeconds > 0) {
       const avgFlow = (prev.flow + curr.flow) / 2;
-      total += avgFlow * dtHours * 3600;
+      total += avgFlow * dtSeconds;
     }
   }
   return total;
@@ -32,51 +31,115 @@ function calculateEffectiveCrossSection(seg, avgWaterDepth) {
   return hydraulicEngine.trapezoidalArea(seg.bottom_width, seg.side_slope, effectiveDepth);
 }
 
-function getSteadyStateWithFlows() {
-  const segments = prepare('SELECT * FROM canal_segments ORDER BY order_index').all();
-  const gates = prepare('SELECT * FROM gates').all();
-  const points = prepare('SELECT * FROM measurement_points').all();
-  const underConstructionIds = siltationService.getUnderConstructionSegmentIds();
+function getWaterLevelHistory(pointId, startTime, endTime) {
+  const history = prepare(`
+    SELECT water_level, timestamp 
+    FROM water_level_history 
+    WHERE point_id = ? AND timestamp >= ? AND timestamp <= ?
+    ORDER BY timestamp ASC
+  `).all(pointId, startTime, endTime);
   
-  const segmentsForHydraulics = segments.map(seg => {
-    if (underConstructionIds.includes(seg.id)) {
-      return { ...seg, siltation_depth: seg.design_water_level };
-    }
-    return seg;
-  });
+  return history.map(h => ({
+    waterLevel: h.water_level,
+    timestamp: h.timestamp
+  }));
+}
 
-  const firstGate = gates.find(g => g.position_on_segment <= 0.01 && g.canal_segment_id === segments[0]?.id);
-  let headwaterDepth = 2.5;
-  if (firstGate) {
-    const gatePoints = points.filter(p => p.gate_id === firstGate.id && p.type === 'upstream_gate');
-    if (gatePoints.length > 0) {
-      const hwLevel = stateManager.getCurrentWaterLevel(gatePoints[0].id);
-      if (hwLevel !== null) {
-        headwaterDepth = hwLevel - segments[0].bottom_elevation;
+function getAllWaterLevelsInWindow(startTime, endTime) {
+  const history = prepare(`
+    SELECT point_id, water_level, timestamp 
+    FROM water_level_history 
+    WHERE timestamp >= ? AND timestamp <= ?
+    ORDER BY timestamp ASC
+  `).all(startTime, endTime);
+  
+  return history.map(h => ({
+    pointId: h.point_id,
+    waterLevel: h.water_level,
+    timestamp: h.timestamp
+  }));
+}
+
+function getSegmentUpstreamDownstreamPoints(seg) {
+  const points = prepare(`
+    SELECT * FROM measurement_points 
+    WHERE canal_segment_id = ?
+    ORDER BY distance_from_upstream
+  `).all(seg.id);
+  
+  if (points.length === 0) {
+    return { upstream: null, downstream: null };
+  }
+  
+  return {
+    upstream: points[0],
+    downstream: points[points.length - 1]
+  };
+}
+
+function computeFlowFromWaterLevels(seg, upstreamLevel, downstreamLevel, gates) {
+  const sd = seg.siltation_depth || 0;
+  const upDepth = Math.max(0, upstreamLevel - seg.bottom_elevation);
+  const downDepth = Math.max(0, downstreamLevel - seg.bottom_elevation);
+  const effUpDepth = Math.max(0, upDepth - sd);
+  const effDownDepth = Math.max(0, downDepth - sd);
+  
+  if (effUpDepth <= 0 || effDownDepth <= 0) {
+    return { throughFlow: 0, diversionFlow: 0, totalFlow: 0 };
+  }
+  
+  const avgEffDepth = (effUpDepth + effDownDepth) / 2;
+  const A = hydraulicEngine.trapezoidalArea(seg.bottom_width, seg.side_slope, avgEffDepth);
+  const R = hydraulicEngine.trapezoidalHydraulicRadius(seg.bottom_width, seg.side_slope, avgEffDepth);
+  const Q = hydraulicEngine.manningDischarge(seg.manning_n, A, R, seg.bed_slope);
+  
+  const segGates = gates.filter(g => g.canal_segment_id === seg.id && g.type === 'diversion');
+  let divFlow = 0;
+  for (const divGate of segGates) {
+    if (divGate.current_opening > 0) {
+      const Cd = divGate.discharge_coeff;
+      const b = divGate.gate_width;
+      const e = divGate.current_opening;
+      const headDiff = (upstreamLevel - downstreamLevel) * 0.3;
+      if (headDiff > 0.01) {
+        divFlow += Cd * b * e * Math.sqrt(2 * 9.81 * Math.max(0, headDiff));
       }
     }
   }
-
-  return hydraulicEngine.computeSteadyState(segmentsForHydraulics, gates, headwaterDepth);
+  
+  return {
+    throughFlow: Math.max(0, Q - divFlow),
+    diversionFlow: divFlow,
+    totalFlow: Q
+  };
 }
 
-function generateFlowTimeSeries(segId, gate, windowStart, windowEnd, isDiversion = false) {
-  const steadyState = getSteadyStateWithFlows();
-  const baseFlow = steadyState[segId] ? 
-    (isDiversion ? steadyState[segId].diversionFlow : steadyState[segId].flow) : 0;
+function calculateGateDischargeAtTime(gate, upstreamDepth, downstreamDepth) {
+  const Cd = gate.discharge_coeff;
+  const b = gate.gate_width;
+  const e = gate.current_opening;
   
-  const timeSeries = [];
-  const interval = 5 * 60 * 1000;
-  
-  for (let t = windowStart; t <= windowEnd; t += interval) {
-    const noise = 1 + (Math.random() - 0.5) * 0.1;
-    timeSeries.push({
-      timestamp: t,
-      flow: baseFlow * noise
-    });
+  if (e <= 0.001 || upstreamDepth <= 0.01) {
+    return 0;
   }
   
-  return timeSeries;
+  const H_up = upstreamDepth;
+  const H_down = Math.max(0, downstreamDepth || 0);
+  
+  if (H_up <= e * 1.05) {
+    return 0;
+  }
+  
+  let Q;
+  if (H_down <= e * 0.7) {
+    Q = Cd * b * e * Math.sqrt(2 * 9.81 * (H_up - e));
+  } else {
+    const diffHead = H_up - H_down;
+    if (diffHead <= 0.001) return 0;
+    Q = Cd * b * e * Math.sqrt(2 * 9.81 * diffHead);
+  }
+  
+  return Math.max(0, Q);
 }
 
 function getSegmentThresholds(segmentId) {
@@ -110,67 +173,88 @@ function calculateWaterBalance(windowMinutes = 30) {
   
   const segments = prepare('SELECT * FROM canal_segments ORDER BY order_index').all();
   const gates = prepare('SELECT * FROM gates').all();
-  const points = prepare('SELECT * FROM measurement_points').all();
   const underConstructionIds = siltationService.getUnderConstructionSegmentIds();
   
-  const results = [];
-  const steadyState = getSteadyStateWithFlows();
+  const orderedSegments = [...segments].sort((a, b) => a.order_index - b.order_index);
   
-  for (const seg of segments) {
+  const segmentFlowData = {};
+  
+  for (const seg of orderedSegments) {
     if (underConstructionIds.includes(seg.id)) {
+      segmentFlowData[seg.id] = { excluded: true };
       continue;
     }
     
-    const segGates = gates.filter(g => g.canal_segment_id === seg.id);
-    const upstreamGate = segGates.find(g => g.position_on_segment <= 0.01);
-    const downstreamGate = segGates.find(g => g.position_on_segment > 0.99);
-    const divGates = segGates.filter(g => g.type === 'diversion' && g.position_on_segment > 0);
+    const { upstream, downstream } = getSegmentUpstreamDownstreamPoints(seg);
     
-    const segPoints = points.filter(p => p.canal_segment_id === seg.id);
-    const upstreamPoint = segPoints.find(p => p.distance_from_upstream <= 1);
-    const downstreamPoint = segPoints.find(p => Math.abs(p.distance_from_upstream - seg.length) < 1);
-    
-    const waterLevelHistory = prepare(`
-      SELECT water_level, timestamp 
-      FROM water_level_history 
-      WHERE point_id IN (?, ?) AND timestamp >= ?
-      ORDER BY timestamp ASC
-    `).all(upstreamPoint?.id || '', downstreamPoint?.id || '', windowStart);
-    
-    const upstreamLevels = waterLevelHistory.filter(h => upstreamPoint && h.point_id === upstreamPoint.id);
-    const downstreamLevels = waterLevelHistory.filter(h => downstreamPoint && h.point_id === downstreamPoint.id);
-    
-    let startUpLevel = null, endUpLevel = null;
-    let startDownLevel = null, endDownLevel = null;
-    
-    if (upstreamLevels.length > 0) {
-      startUpLevel = upstreamLevels[0].water_level;
-      endUpLevel = upstreamLevels[upstreamLevels.length - 1].water_level;
-    }
-    if (downstreamLevels.length > 0) {
-      startDownLevel = downstreamLevels[0].water_level;
-      endDownLevel = downstreamLevels[downstreamLevels.length - 1].water_level;
+    if (!upstream || !downstream) {
+      segmentFlowData[seg.id] = { excluded: true, reason: 'no_points' };
+      continue;
     }
     
-    const ss = steadyState[seg.id];
-    if (startUpLevel === null && ss) startUpLevel = ss.upstreamLevel;
-    if (endUpLevel === null && ss) endUpLevel = ss.upstreamLevel;
-    if (startDownLevel === null && ss) startDownLevel = ss.downstreamLevel;
-    if (endDownLevel === null && ss) endDownLevel = ss.downstreamLevel;
+    const upHistory = getWaterLevelHistory(upstream.id, windowStart, now);
+    const downHistory = getWaterLevelHistory(downstream.id, windowStart, now);
     
-    const inflowSeries = generateFlowTimeSeries(seg.id, upstreamGate, windowStart, now, false);
+    if (upHistory.length < 2 || downHistory.length < 2) {
+      const steadyState = getSteadyStateFlows();
+      const ss = steadyState[seg.id] || { throughFlow: 0, diversionFlow: 0 };
+      const avgFlow = ss.throughFlow || 0;
+      const avgDiv = ss.diversionFlow || 0;
+      
+      const startTime = upHistory.length > 0 ? upHistory[0].timestamp : windowStart;
+      const endTime = upHistory.length > 0 ? upHistory[upHistory.length - 1].timestamp : now;
+      
+      const dt = (endTime - startTime) / 1000;
+      segmentFlowData[seg.id] = {
+        inflowVolume: avgFlow * dt,
+        outflowVolume: avgFlow * dt + avgDiv * dt,
+        storageChange: 0,
+        startUpLevel: upHistory.length > 0 ? upHistory[0].waterLevel : null,
+        endUpLevel: upHistory.length > 0 ? upHistory[upHistory.length - 1].waterLevel : null,
+        startDownLevel: downHistory.length > 0 ? downHistory[0].waterLevel : null,
+        endDownLevel: downHistory.length > 0 ? downHistory[downHistory.length - 1].waterLevel : null
+      };
+      continue;
+    }
+    
+    const flowTimeSeries = [];
+    const minLen = Math.min(upHistory.length, downHistory.length);
+    
+    for (let i = 0; i < minLen; i++) {
+      const upLv = upHistory[i].waterLevel;
+      const downLv = downHistory[i].waterLevel;
+      const ts = upHistory[i].timestamp;
+      
+      const flows = computeFlowFromWaterLevels(seg, upLv, downLv, gates);
+      
+      const segGates = gates.filter(g => g.canal_segment_id === seg.id && g.type === 'diversion');
+      let actualDivFlow = 0;
+      for (const divGate of segGates) {
+        const gateUpDepth = Math.max(0, upLv - seg.bottom_elevation);
+        const gateDownDepth = Math.max(0, downLv - seg.bottom_elevation);
+        actualDivFlow += calculateGateDischargeAtTime(divGate, gateUpDepth, gateDownDepth);
+      }
+      
+      flowTimeSeries.push({
+        timestamp: ts,
+        flow: flows.throughFlow,
+        diversion: actualDivFlow
+      });
+    }
+    
+    const inflowSeries = flowTimeSeries.map(ft => ({ timestamp: ft.timestamp, flow: ft.flow + ft.diversion }));
+    const outflowSeries = flowTimeSeries.map(ft => ({ timestamp: ft.timestamp, flow: ft.flow }));
+    
     const inflowVolume = trapezoidalIntegral(inflowSeries);
+    const outflowVolume = trapezoidalIntegral(outflowSeries);
     
-    const outflowSeries = generateFlowTimeSeries(seg.id, downstreamGate, windowStart, now, false);
-    let outflowVolume = trapezoidalIntegral(outflowSeries);
+    const startUpLevel = upHistory[0].waterLevel;
+    const endUpLevel = upHistory[upHistory.length - 1].waterLevel;
+    const startDownLevel = downHistory[0].waterLevel;
+    const endDownLevel = downHistory[downHistory.length - 1].waterLevel;
     
-    for (const divGate of divGates) {
-      const divSeries = generateFlowTimeSeries(seg.id, divGate, windowStart, now, true);
-      outflowVolume += trapezoidalIntegral(divSeries);
-    }
-    
-    const startAvgLevel = ((startUpLevel || 0) + (startDownLevel || 0)) / 2;
-    const endAvgLevel = ((endUpLevel || 0) + (endDownLevel || 0)) / 2;
+    const startAvgLevel = (startUpLevel + startDownLevel) / 2;
+    const endAvgLevel = (endUpLevel + endDownLevel) / 2;
     const startAvgDepth = Math.max(0, startAvgLevel - seg.bottom_elevation);
     const endAvgDepth = Math.max(0, endAvgLevel - seg.bottom_elevation);
     const avgDepth = (startAvgDepth + endAvgDepth) / 2;
@@ -179,8 +263,39 @@ function calculateWaterBalance(windowMinutes = 30) {
     const levelChange = endAvgLevel - startAvgLevel;
     const storageChange = effectiveArea * seg.length * levelChange;
     
-    const imbalanceVolume = inflowVolume - outflowVolume - storageChange;
-    const imbalanceRate = inflowVolume > 0 ? (imbalanceVolume / inflowVolume) * 100 : 0;
+    segmentFlowData[seg.id] = {
+      inflowVolume,
+      outflowVolume,
+      storageChange,
+      startUpLevel,
+      endUpLevel,
+      startDownLevel,
+      endDownLevel
+    };
+  }
+  
+  const results = [];
+  
+  for (let i = 0; i < orderedSegments.length; i++) {
+    const seg = orderedSegments[i];
+    
+    if (segmentFlowData[seg.id]?.excluded) {
+      continue;
+    }
+    
+    let actualInflowVolume;
+    if (i === 0) {
+      actualInflowVolume = segmentFlowData[seg.id].inflowVolume;
+    } else {
+      const prevSeg = orderedSegments[i - 1];
+      actualInflowVolume = segmentFlowData[prevSeg.id]?.outflowVolume || segmentFlowData[seg.id].inflowVolume;
+    }
+    
+    const outflowVolume = segmentFlowData[seg.id].outflowVolume;
+    const storageChange = segmentFlowData[seg.id].storageChange;
+    
+    const imbalanceVolume = actualInflowVolume - outflowVolume - storageChange;
+    const imbalanceRate = actualInflowVolume > 0 ? (imbalanceVolume / actualInflowVolume) * 100 : 0;
     
     const thresholds = getSegmentThresholds(seg.id);
     const status = determineStatus(imbalanceRate, thresholds);
@@ -189,7 +304,7 @@ function calculateWaterBalance(windowMinutes = 30) {
       segmentId: seg.id,
       segmentName: seg.name,
       windowMinutes: Math.max(10, Math.min(360, windowMinutes)),
-      inflowVolume: Math.round(inflowVolume * 1000) / 1000,
+      inflowVolume: Math.round(actualInflowVolume * 1000) / 1000,
       outflowVolume: Math.round(outflowVolume * 1000) / 1000,
       storageChange: Math.round(storageChange * 1000) / 1000,
       imbalanceVolume: Math.round(imbalanceVolume * 1000) / 1000,
@@ -197,7 +312,11 @@ function calculateWaterBalance(windowMinutes = 30) {
       status: status,
       warningThreshold: thresholds.warning,
       alarmThreshold: thresholds.alarm,
-      calculationTime: now
+      calculationTime: now,
+      startUpLevel: segmentFlowData[seg.id].startUpLevel,
+      endUpLevel: segmentFlowData[seg.id].endUpLevel,
+      startDownLevel: segmentFlowData[seg.id].startDownLevel,
+      endDownLevel: segmentFlowData[seg.id].endDownLevel
     };
     
     results.push(result);
@@ -222,6 +341,37 @@ function calculateWaterBalance(windowMinutes = 30) {
     windowMinutes: Math.max(10, Math.min(360, windowMinutes)),
     segments: results
   };
+}
+
+function getSteadyStateFlows() {
+  const segments = prepare('SELECT * FROM canal_segments ORDER BY order_index').all();
+  const gates = prepare('SELECT * FROM gates').all();
+  const points = prepare('SELECT * FROM measurement_points').all();
+  const underConstructionIds = siltationService.getUnderConstructionSegmentIds();
+  
+  const segmentsForHydraulics = segments.map(seg => {
+    if (underConstructionIds.includes(seg.id)) {
+      return { ...seg, siltation_depth: seg.design_water_level };
+    }
+    return seg;
+  });
+
+  const firstGate = gates.find(g => g.position_on_segment <= 0.01 && g.canal_segment_id === segments[0]?.id);
+  let headwaterDepth = 2.5;
+  if (firstGate) {
+    const gatePoints = points.filter(p => p.gate_id === firstGate.id && p.type === 'upstream_gate');
+    if (gatePoints.length > 0) {
+      const hwLevel = prepare(`
+        SELECT water_level FROM water_level_history 
+        WHERE point_id = ? ORDER BY timestamp DESC LIMIT 1
+      `).get(gatePoints[0].id);
+      if (hwLevel) {
+        headwaterDepth = hwLevel.water_level - segments[0].bottom_elevation;
+      }
+    }
+  }
+
+  return hydraulicEngine.computeSteadyState(segmentsForHydraulics, gates, headwaterDepth);
 }
 
 function calculateLeakageConfidence(records) {
