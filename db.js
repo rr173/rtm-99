@@ -317,6 +317,40 @@ async function initDatabase() {
       ON patrol_reports(quality_score);
     CREATE INDEX IF NOT EXISTS idx_patrol_reports_generated
       ON patrol_reports(generated_at);
+
+    CREATE TABLE IF NOT EXISTS water_balance_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      calculation_time INTEGER NOT NULL,
+      segment_id TEXT NOT NULL,
+      segment_name TEXT NOT NULL,
+      window_minutes INTEGER NOT NULL,
+      inflow_volume REAL NOT NULL DEFAULT 0,
+      outflow_volume REAL NOT NULL DEFAULT 0,
+      storage_change REAL NOT NULL DEFAULT 0,
+      imbalance_volume REAL NOT NULL DEFAULT 0,
+      imbalance_rate REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'normal',
+      warning_threshold REAL NOT NULL DEFAULT 5,
+      alarm_threshold REAL NOT NULL DEFAULT 15
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_water_balance_records_time
+      ON water_balance_records(calculation_time);
+    CREATE INDEX IF NOT EXISTS idx_water_balance_records_segment
+      ON water_balance_records(segment_id);
+    CREATE INDEX IF NOT EXISTS idx_water_balance_records_seg_time
+      ON water_balance_records(segment_id, calculation_time);
+
+    CREATE TABLE IF NOT EXISTS water_balance_thresholds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      segment_id TEXT NOT NULL UNIQUE,
+      warning_threshold REAL NOT NULL DEFAULT 5,
+      alarm_threshold REAL NOT NULL DEFAULT 15,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_water_balance_thresholds_segment
+      ON water_balance_thresholds(segment_id);
   `);
   
   saveDatabase();

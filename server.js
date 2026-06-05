@@ -14,6 +14,8 @@ const conflictsRoutes = require('./routes/conflicts');
 const systemRoutes = require('./routes/system');
 const siltationRoutes = require('./routes/siltation');
 const patrolRoutes = require('./routes/patrol');
+const waterBalanceRoutes = require('./routes/waterBalance');
+const waterBalanceService = require('./services/waterBalanceService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -46,6 +48,7 @@ app.use('/api/conflicts', conflictsRoutes);
 app.use('/api/system', systemRoutes);
 app.use('/api/siltation', siltationRoutes);
 app.use('/api/patrol', patrolRoutes);
+app.use('/api/water-balance', waterBalanceRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -84,6 +87,9 @@ async function startServer() {
     console.log('正在初始化演示巡检路线...');
     initDemoPatrolRoute();
     
+    console.log('正在执行初始水量平衡计算...');
+    waterBalanceService.calculateWaterBalance(30);
+    
     app.listen(PORT, () => {
       console.log('========================================');
       console.log('  水利渠道闸群联调与水位演算服务');
@@ -121,6 +127,14 @@ async function startServer() {
       console.log('  POST /api/patrol/anomalies - 上报异常');
       console.log('  GET  /api/patrol/anomalies - 异常列表');
       console.log('  GET  /api/patrol/anomalies/stats - 异常统计');
+      console.log('');
+      console.log('水量平衡接口:');
+      console.log('  POST /api/water-balance/calculate - 触发水量平衡计算');
+      console.log('  GET  /api/water-balance/leakage-analysis - 漏损定位分析');
+      console.log('  GET  /api/water-balance/history - 渠段历史记录');
+      console.log('  GET  /api/water-balance/daily-report - 当日水量平衡日报');
+      console.log('  POST /api/water-balance/threshold - 设置告警阈值');
+      console.log('  GET  /api/water-balance/thresholds - 查询告警阈值');
       console.log('');
     });
   } catch (err) {
