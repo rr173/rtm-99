@@ -503,6 +503,54 @@ async function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_dispatch_daily_summary_date ON dispatch_daily_summary(date);
+
+    CREATE TABLE IF NOT EXISTS patrol_work_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_number TEXT NOT NULL UNIQUE,
+      anomaly_id INTEGER NOT NULL,
+      anomaly_type TEXT NOT NULL,
+      anomaly_severity TEXT NOT NULL CHECK(anomaly_severity IN ('low', 'medium', 'high')),
+      segment_id TEXT NOT NULL,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'assigned', 'processing', 'verifying', 'closed', 'rejected')),
+      created_at INTEGER NOT NULL,
+      assigned_at INTEGER,
+      assigned_by TEXT,
+      handler_name TEXT,
+      deadline INTEGER,
+      process_description TEXT,
+      process_measures TEXT,
+      processed_at INTEGER,
+      verify_result TEXT,
+      verify_opinion TEXT,
+      verified_at INTEGER,
+      closed_at INTEGER,
+      escalation_count INTEGER NOT NULL DEFAULT 0,
+      notes TEXT,
+      FOREIGN KEY (anomaly_id) REFERENCES patrol_anomalies(id),
+      FOREIGN KEY (segment_id) REFERENCES canal_segments(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_patrol_work_orders_status ON patrol_work_orders(status);
+    CREATE INDEX IF NOT EXISTS idx_patrol_work_orders_anomaly ON patrol_work_orders(anomaly_id);
+    CREATE INDEX IF NOT EXISTS idx_patrol_work_orders_segment ON patrol_work_orders(segment_id);
+    CREATE INDEX IF NOT EXISTS idx_patrol_work_orders_handler ON patrol_work_orders(handler_name);
+    CREATE INDEX IF NOT EXISTS idx_patrol_work_orders_created ON patrol_work_orders(created_at);
+    CREATE INDEX IF NOT EXISTS idx_patrol_work_orders_deadline ON patrol_work_orders(deadline);
+
+    CREATE TABLE IF NOT EXISTS patrol_work_order_timeline (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_order_id INTEGER NOT NULL,
+      status_from TEXT,
+      status_to TEXT NOT NULL,
+      operator TEXT,
+      remark TEXT,
+      timestamp INTEGER NOT NULL,
+      FOREIGN KEY (work_order_id) REFERENCES patrol_work_orders(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_patrol_work_order_timeline_wo ON patrol_work_order_timeline(work_order_id, timestamp);
   `);
   
   saveDatabase();

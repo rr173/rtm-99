@@ -269,4 +269,146 @@ router.get('/reports', (req, res) => {
   }
 });
 
+router.post('/work-orders/assign', (req, res) => {
+  try {
+    const { workOrderIds, handlerName, assignedBy } = req.body;
+
+    if (!workOrderIds || !Array.isArray(workOrderIds)) {
+      return res.status(400).json({ error: 'workOrderIds 工单ID数组不能为空' });
+    }
+    if (!handlerName) {
+      return res.status(400).json({ error: 'handlerName 处理人姓名不能为空' });
+    }
+
+    const result = patrolService.assignWorkOrders(workOrderIds, handlerName, assignedBy);
+    res.json({
+      success: true,
+      assigned_count: result.assigned.length,
+      failed_count: result.failed.length,
+      assigned: result.assigned,
+      failed: result.failed
+    });
+  } catch (err) {
+    console.error('Assign work orders error:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/work-orders', (req, res) => {
+  try {
+    const { status, handlerName, anomalyType, segmentId, startTime, endTime } = req.query;
+    const filters = {};
+
+    if (status) filters.status = status;
+    if (handlerName) filters.handlerName = handlerName;
+    if (anomalyType) filters.anomalyType = anomalyType;
+    if (segmentId) filters.segmentId = segmentId;
+    if (startTime) filters.startTime = startTime;
+    if (endTime) filters.endTime = endTime;
+
+    const result = patrolService.getWorkOrderList(filters);
+    res.json(result);
+  } catch (err) {
+    console.error('Get work orders error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/work-orders/overdue', (req, res) => {
+  try {
+    const result = patrolService.getOverdueWorkOrders();
+    res.json(result);
+  } catch (err) {
+    console.error('Get overdue work orders error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/work-orders/dashboard', (req, res) => {
+  try {
+    const result = patrolService.getWorkOrderDashboard();
+    res.json(result);
+  } catch (err) {
+    console.error('Get work order dashboard error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/work-orders/:id/timeline', (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = patrolService.getWorkOrderTimeline(parseInt(id));
+    res.json(result);
+  } catch (err) {
+    console.error('Get work order timeline error:', err);
+    res.status(404).json({ error: err.message });
+  }
+});
+
+router.put('/work-orders/:id/process', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { description, measures, operator } = req.body;
+
+    if (!description) {
+      return res.status(400).json({ error: 'description 处理描述不能为空' });
+    }
+    if (!measures) {
+      return res.status(400).json({ error: 'measures 处理措施不能为空' });
+    }
+
+    const result = patrolService.processWorkOrder(parseInt(id), description, measures, operator);
+    res.json({
+      success: true,
+      work_order: result
+    });
+  } catch (err) {
+    console.error('Process work order error:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.put('/work-orders/:id/verify', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { result: verifyResult, opinion, operator } = req.body;
+
+    if (!verifyResult || (verifyResult !== 'pass' && verifyResult !== 'reject')) {
+      return res.status(400).json({ error: 'result 验收结果必须是 pass 或 reject' });
+    }
+
+    const result = patrolService.verifyWorkOrder(parseInt(id), verifyResult, opinion, operator);
+    res.json({
+      success: true,
+      work_order: result
+    });
+  } catch (err) {
+    console.error('Verify work order error:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.put('/work-orders/:id/reprocess', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { description, measures, operator } = req.body;
+
+    if (!description) {
+      return res.status(400).json({ error: 'description 处理描述不能为空' });
+    }
+    if (!measures) {
+      return res.status(400).json({ error: 'measures 处理措施不能为空' });
+    }
+
+    const result = patrolService.reprocessWorkOrder(parseInt(id), description, measures, operator);
+    res.json({
+      success: true,
+      work_order: result
+    });
+  } catch (err) {
+    console.error('Reprocess work order error:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 module.exports = router;

@@ -506,7 +506,448 @@ function reportAnomaly(taskId, latitude, longitude, type, description, severity)
   );
 
   const anomaly = prepare('SELECT * FROM patrol_anomalies WHERE id = ?').get(result.lastInsertRowid);
+  createWorkOrderFromAnomaly(anomaly);
   return anomaly;
+}
+
+const SEVERITY_DEADLINE_HOURS = {
+  low: 24,
+  medium: 8,
+  high: 4
+};
+
+function generateWorkOrderNumber() {
+  const now = new Date();
+  const dateStr = now.getFullYear().toString() +
+    (now.getMonth() + 1).toString().padStart(2, '0') +
+    now.getDate().toString().padStart(2, '0');
+  const seqRow = prepare(`
+    SELECT COUNT(*) as cnt FROM patrol_work_orders 
+    WHERE order_number LIKE ?
+  `).get('WO' + dateStr + '%');
+  const seq = (seqRow ? seqRow.cnt : 0) + 1;
+  return 'WO' + dateStr + seq.toString().padStart(4, '0');
+}
+
+function addTimelineEntry(workOrderId, statusFrom, statusTo, operator, remark) {
+  const now = Date.now();
+  prepare(`
+    INSERT INTO patrol_work_order_timeline (work_order_id, status_from, status_to, operator, remark, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(workOrderId, statusFrom || null, statusTo, operator || null, remark || null, now);
+}
+
+function createWorkOrderFromAnomaly(anomaly) {
+  const orderNumber = generateWorkOrderNumber();
+  const now = Date.now();
+
+  const result = prepare(`
+    INSERT INTO patrol_work_orders (
+      order_number, anomaly_id, anomaly_type, anomaly_severity,
+      segment_id, latitude, longitude, status, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+  `).run(
+    orderNumber, anomaly.id, anomaly.type, anomaly.severity,
+    anomaly.segment_id, anomaly.latitude, anomaly.longitude, now
+  );
+
+  const workOrderId = result.lastInsertRowid;
+  addTimelineEntry(workOrderId, null, 'pending', null, '异常上报自动创建工单');
+
+  return getWorkOrderDetail(workOrderId);
+}
+
+function getWorkOrderDetail(id) {
+  const workOrder = prepare(`
+    SELECT pwo.*, cs.name as segment_name,
+      pt.inspector_name as reporter_name
+    FROM patrol_work_orders pwo
+    LEFT JOIN canal_segments cs ON pwo.segment_id = cs.id
+    LEFT JOIN patrol_anomalies pa ON pwo.anomaly_id = pa.id
+    LEFT JOIN patrol_tasks pt ON pa.task_id = pt.id
+    WHERE pwo.id = ?
+  `).get(parseInt(id));
+
+  if (!workOrder) return null;
+  return workOrder;
+}
+
+function assignWorkOrders(workOrderIds, handlerName, assignedBy) {
+  if (!Array.isArray(workOrderIds) || workOrderIds.length === 0) {
+    throw new Error('工单ID列表不能为空');
+  }
+  if (!handlerName || typeof handlerName !== 'string' || handlerName.trim().length === 0) {
+    throw new Error('处理人姓名不能为空');
+  }
+
+  const now = Date.now();
+  const assigned = [];
+  const failed = [];
+
+  for (const rawId of workOrderIds) {
+    const id = parseInt(rawId);
+    const wo = prepare('SELECT * FROM patrol_work_orders WHERE id = ?').get(id);
+    if (!wo) {
+      failed.push({ id: rawId, reason: '工单不存在' });
+      continue;
+    }
+    if (wo.status !== 'pending') {
+      failed.push({ id: rawId, reason: '工单状态不是待指派,当前状态:' + wo.status });
+      continue;
+    }
+
+    const deadlineHours = SEVERITY_DEADLINE_HOURS[wo.anomaly_severity] || 24;
+    const deadline = now + deadlineHours * 60 * 60 * 1000;
+
+    prepare(`
+      UPDATE patrol_work_orders 
+      SET status = 'assigned', assigned_at = ?, assigned_by = ?, handler_name = ?, deadline = ?
+      WHERE id = ?
+    `).run(now, assignedBy || null, handlerName, deadline, id);
+
+    addTimelineEntry(id, 'pending', 'assigned', assignedBy || null, 
+      `指派给处理人: ${handlerName}, 处理时限: ${deadlineHours}小时`);
+
+    assigned.push(getWorkOrderDetail(id));
+  }
+
+  return { assigned: assigned, failed: failed };
+}
+
+function getWorkOrderList(filters = {}) {
+  let sql = `
+    SELECT pwo.*, cs.name as segment_name,
+      pt.inspector_name as reporter_name
+    FROM patrol_work_orders pwo
+    LEFT JOIN canal_segments cs ON pwo.segment_id = cs.id
+    LEFT JOIN patrol_anomalies pa ON pwo.anomaly_id = pa.id
+    LEFT JOIN patrol_tasks pt ON pa.task_id = pt.id
+    WHERE 1=1
+  `;
+  const params = [];
+
+  if (filters.status) {
+    sql += ' AND pwo.status = ?';
+    params.push(filters.status);
+  }
+  if (filters.handlerName) {
+    sql += ' AND pwo.handler_name = ?';
+    params.push(filters.handlerName);
+  }
+  if (filters.anomalyType) {
+    sql += ' AND pwo.anomaly_type = ?';
+    params.push(filters.anomalyType);
+  }
+  if (filters.segmentId) {
+    sql += ' AND pwo.segment_id = ?';
+    params.push(filters.segmentId);
+  }
+  if (filters.startTime) {
+    sql += ' AND pwo.created_at >= ?';
+    params.push(parseInt(filters.startTime));
+  }
+  if (filters.endTime) {
+    sql += ' AND pwo.created_at <= ?';
+    params.push(parseInt(filters.endTime));
+  }
+
+  sql += ' ORDER BY pwo.created_at DESC';
+
+  const workOrders = prepare(sql).all(...params);
+  return {
+    total: workOrders.length,
+    work_orders: workOrders
+  };
+}
+
+function processWorkOrder(id, description, measures, operator) {
+  const woId = parseInt(id);
+  const wo = prepare('SELECT * FROM patrol_work_orders WHERE id = ?').get(woId);
+  if (!wo) {
+    throw new Error('工单不存在');
+  }
+  if (wo.status !== 'assigned' && wo.status !== 'processing') {
+    throw new Error('工单状态不允许处理,当前状态:' + wo.status);
+  }
+  if (!description || typeof description !== 'string' || description.trim().length === 0) {
+    throw new Error('处理描述不能为空');
+  }
+  if (!measures || typeof measures !== 'string' || measures.trim().length === 0) {
+    throw new Error('处理措施不能为空');
+  }
+
+  const now = Date.now();
+  const prevStatus = wo.status;
+
+  prepare(`
+    UPDATE patrol_work_orders 
+    SET status = 'verifying', process_description = ?, process_measures = ?, processed_at = ?
+    WHERE id = ?
+  `).run(description, measures, now, woId);
+
+  addTimelineEntry(woId, prevStatus, 'verifying', operator || wo.handler_name, 
+    '提交处理结果,等待验收');
+
+  return getWorkOrderDetail(woId);
+}
+
+function verifyWorkOrder(id, result, opinion, operator) {
+  const woId = parseInt(id);
+  const wo = prepare('SELECT * FROM patrol_work_orders WHERE id = ?').get(woId);
+  if (!wo) {
+    throw new Error('工单不存在');
+  }
+  if (wo.status !== 'verifying') {
+    throw new Error('工单状态不允许验收,当前状态:' + wo.status);
+  }
+  if (!result || (result !== 'pass' && result !== 'reject')) {
+    throw new Error('验收结果必须是 pass 或 reject');
+  }
+
+  const now = Date.now();
+  let newStatus;
+  let remark;
+
+  if (result === 'pass') {
+    newStatus = 'closed';
+    remark = '验收通过,工单关闭' + (opinion ? ',验收意见:' + opinion : '');
+    prepare(`
+      UPDATE patrol_work_orders 
+      SET status = 'closed', verify_result = 'pass', verify_opinion = ?, verified_at = ?, closed_at = ?
+      WHERE id = ?
+    `).run(opinion || null, now, now, woId);
+  } else {
+    newStatus = 'rejected';
+    remark = '验收不通过,打回重做' + (opinion ? ',验收意见:' + opinion : '');
+    prepare(`
+      UPDATE patrol_work_orders 
+      SET status = 'rejected', verify_result = 'reject', verify_opinion = ?, verified_at = ?
+      WHERE id = ?
+    `).run(opinion || null, now, woId);
+  }
+
+  addTimelineEntry(woId, 'verifying', newStatus, operator || null, remark);
+  return getWorkOrderDetail(woId);
+}
+
+function reprocessWorkOrder(id, description, measures, operator) {
+  const woId = parseInt(id);
+  const wo = prepare('SELECT * FROM patrol_work_orders WHERE id = ?').get(woId);
+  if (!wo) {
+    throw new Error('工单不存在');
+  }
+  if (wo.status !== 'rejected') {
+    throw new Error('只有已打回的工单才能重新提交,当前状态:' + wo.status);
+  }
+  if (!description || typeof description !== 'string' || description.trim().length === 0) {
+    throw new Error('处理描述不能为空');
+  }
+  if (!measures || typeof measures !== 'string' || measures.trim().length === 0) {
+    throw new Error('处理措施不能为空');
+  }
+
+  const now = Date.now();
+  prepare(`
+    UPDATE patrol_work_orders 
+    SET status = 'verifying', process_description = ?, process_measures = ?, processed_at = ?
+    WHERE id = ?
+  `).run(description, measures, now, woId);
+
+  addTimelineEntry(woId, 'rejected', 'verifying', operator || wo.handler_name, 
+    '重新提交处理结果,等待验收');
+
+  return getWorkOrderDetail(woId);
+}
+
+function escalateSeverity(current) {
+  if (current === 'low') return 'medium';
+  if (current === 'medium') return 'high';
+  return 'high';
+}
+
+function getOverdueWorkOrders() {
+  const now = Date.now();
+  const overdue = prepare(`
+    SELECT pwo.*, cs.name as segment_name,
+      pt.inspector_name as reporter_name
+    FROM patrol_work_orders pwo
+    LEFT JOIN canal_segments cs ON pwo.segment_id = cs.id
+    LEFT JOIN patrol_anomalies pa ON pwo.anomaly_id = pa.id
+    LEFT JOIN patrol_tasks pt ON pa.task_id = pt.id
+    WHERE pwo.status != 'closed' 
+      AND pwo.deadline IS NOT NULL 
+      AND ? > pwo.deadline
+    ORDER BY pwo.deadline ASC
+  `).all(now);
+
+  for (const wo of overdue) {
+    const newSeverity = escalateSeverity(wo.anomaly_severity);
+    if (newSeverity !== wo.anomaly_severity) {
+      const escalationNote = `超时自动升级: ${wo.anomaly_severity} -> ${newSeverity}`;
+      prepare(`
+        UPDATE patrol_work_orders 
+        SET anomaly_severity = ?, 
+            escalation_count = escalation_count + 1,
+            notes = COALESCE(notes || '; ', '') || ?
+        WHERE id = ?
+      `).run(newSeverity, escalationNote + ' @ ' + new Date(now).toISOString(), wo.id);
+
+      addTimelineEntry(wo.id, wo.status, wo.status, 'system', escalationNote);
+
+      wo.anomaly_severity = newSeverity;
+      wo.escalation_count = (wo.escalation_count || 0) + 1;
+    }
+  }
+
+  const refreshed = prepare(`
+    SELECT pwo.*, cs.name as segment_name,
+      pt.inspector_name as reporter_name
+    FROM patrol_work_orders pwo
+    LEFT JOIN canal_segments cs ON pwo.segment_id = cs.id
+    LEFT JOIN patrol_anomalies pa ON pwo.anomaly_id = pa.id
+    LEFT JOIN patrol_tasks pt ON pa.task_id = pt.id
+    WHERE pwo.status != 'closed' 
+      AND pwo.deadline IS NOT NULL 
+      AND ? > pwo.deadline
+    ORDER BY pwo.deadline ASC
+  `).all(now);
+
+  return {
+    total: refreshed.length,
+    overdue_work_orders: refreshed
+  };
+}
+
+function getWorkOrderTimeline(id) {
+  const woId = parseInt(id);
+  const wo = prepare('SELECT * FROM patrol_work_orders WHERE id = ?').get(woId);
+  if (!wo) {
+    throw new Error('工单不存在');
+  }
+
+  const timeline = prepare(`
+    SELECT * FROM patrol_work_order_timeline 
+    WHERE work_order_id = ? 
+    ORDER BY timestamp ASC
+  `).all(woId);
+
+  return {
+    work_order_id: woId,
+    order_number: wo.order_number,
+    timeline: timeline
+  };
+}
+
+function getStartOfWeek(ts) {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  d.setDate(diff);
+  return d.getTime();
+}
+
+function getWorkOrderDashboard() {
+  const now = Date.now();
+  const weekStart = getStartOfWeek(now);
+
+  const statusCounts = prepare(`
+    SELECT status, COUNT(*) as count 
+    FROM patrol_work_orders 
+    GROUP BY status
+  `).all();
+
+  const statusMap = { pending: 0, assigned: 0, processing: 0, verifying: 0, closed: 0, rejected: 0 };
+  for (const s of statusCounts) {
+    statusMap[s.status] = s.count;
+  }
+
+  const avgProcessResult = prepare(`
+    SELECT AVG(pwo.closed_at - pwo.assigned_at) as avg_ms
+    FROM patrol_work_orders pwo
+    WHERE pwo.status = 'closed' 
+      AND pwo.assigned_at IS NOT NULL 
+      AND pwo.closed_at IS NOT NULL
+  `).get();
+  const avgProcessingHours = avgProcessResult && avgProcessResult.avg_ms 
+    ? Math.round((avgProcessResult.avg_ms / 3600000) * 100) / 100 
+    : 0;
+
+  const totalResult = prepare('SELECT COUNT(*) as total FROM patrol_work_orders').get();
+  const total = totalResult ? totalResult.total : 0;
+
+  const overdueResult = prepare(`
+    SELECT COUNT(*) as cnt 
+    FROM patrol_work_orders 
+    WHERE status != 'closed' 
+      AND deadline IS NOT NULL 
+      AND ? > deadline
+  `).get(now);
+  const overdueCount = overdueResult ? overdueResult.cnt : 0;
+  const overdueRate = total > 0 ? Math.round((overdueCount / total) * 10000) / 100 : 0;
+
+  const handlerStats = prepare(`
+    SELECT 
+      pwo.handler_name,
+      SUM(CASE WHEN pwo.status = 'closed' THEN 1 ELSE 0 END) as completed_count,
+      AVG(CASE WHEN pwo.status = 'closed' AND pwo.assigned_at IS NOT NULL AND pwo.closed_at IS NOT NULL 
+          THEN (pwo.closed_at - pwo.assigned_at) / 3600000 ELSE NULL END) as avg_hours
+    FROM patrol_work_orders pwo
+    WHERE pwo.handler_name IS NOT NULL
+    GROUP BY pwo.handler_name
+  `).all();
+
+  const handlerStatsFormatted = handlerStats.map(h => ({
+    handler_name: h.handler_name,
+    completed_count: h.completed_count || 0,
+    avg_processing_hours: h.avg_hours ? Math.round(h.avg_hours * 100) / 100 : 0
+  }));
+
+  const weekCreated = prepare(`
+    SELECT COUNT(*) as cnt FROM patrol_work_orders WHERE created_at >= ?
+  `).get(weekStart);
+
+  const weekClosed = prepare(`
+    SELECT COUNT(*) as cnt FROM patrol_work_orders WHERE closed_at >= ?
+  `).get(weekStart);
+
+  const dailyTrend = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    const dayStart = d.getTime();
+    const dayEnd = dayStart + 86400000;
+
+    const created = prepare(`
+      SELECT COUNT(*) as cnt FROM patrol_work_orders WHERE created_at >= ? AND created_at < ?
+    `).get(dayStart, dayEnd);
+
+    const closed = prepare(`
+      SELECT COUNT(*) as cnt FROM patrol_work_orders WHERE closed_at >= ? AND closed_at < ?
+    `).get(dayStart, dayEnd);
+
+    dailyTrend.push({
+      date: d.toISOString().slice(0, 10),
+      created: created ? created.cnt : 0,
+      closed: closed ? closed.cnt : 0
+    });
+  }
+
+  return {
+    status_counts: statusMap,
+    avg_processing_hours: avgProcessingHours,
+    total_work_orders: total,
+    overdue_count: overdueCount,
+    overdue_rate: overdueRate,
+    handler_stats: handlerStatsFormatted,
+    week_summary: {
+      start_timestamp: weekStart,
+      new_work_orders: weekCreated ? weekCreated.cnt : 0,
+      closed_work_orders: weekClosed ? weekClosed.cnt : 0
+    },
+    weekly_daily_trend: dailyTrend
+  };
 }
 
 function getAnomalyList(filters = {}) {
@@ -928,5 +1369,14 @@ module.exports = {
   getReportDetail,
   getReportDetailByTaskId,
   getReportList,
-  getReportSummary
+  getReportSummary,
+  assignWorkOrders,
+  getWorkOrderList,
+  getWorkOrderDetail,
+  processWorkOrder,
+  verifyWorkOrder,
+  reprocessWorkOrder,
+  getOverdueWorkOrders,
+  getWorkOrderTimeline,
+  getWorkOrderDashboard
 };
