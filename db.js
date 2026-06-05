@@ -351,6 +351,80 @@ async function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_water_balance_thresholds_segment
       ON water_balance_thresholds(segment_id);
+
+    CREATE TABLE IF NOT EXISTS emergency_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      priority INTEGER NOT NULL DEFAULT 3 CHECK(priority BETWEEN 1 AND 5),
+      enabled INTEGER NOT NULL DEFAULT 1,
+      effective_start_time TEXT,
+      effective_end_time TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_emergency_plans_enabled ON emergency_plans(enabled);
+    CREATE INDEX IF NOT EXISTS idx_emergency_plans_priority ON emergency_plans(priority);
+
+    CREATE TABLE IF NOT EXISTS emergency_plan_conditions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      plan_id INTEGER NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('water_level', 'gate_fault', 'flow_change')),
+      target_id TEXT NOT NULL,
+      operator TEXT NOT NULL,
+      threshold REAL NOT NULL,
+      tolerance REAL,
+      duration_seconds INTEGER,
+      FOREIGN KEY (plan_id) REFERENCES emergency_plans(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_emergency_conditions_plan ON emergency_plan_conditions(plan_id);
+
+    CREATE TABLE IF NOT EXISTS emergency_plan_actions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      plan_id INTEGER NOT NULL,
+      order_index INTEGER NOT NULL,
+      gate_id TEXT NOT NULL,
+      target_opening REAL NOT NULL,
+      adjustment_type TEXT NOT NULL CHECK(adjustment_type IN ('absolute', 'relative')),
+      FOREIGN KEY (plan_id) REFERENCES emergency_plans(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_emergency_actions_plan ON emergency_plan_actions(plan_id);
+    CREATE INDEX IF NOT EXISTS idx_emergency_actions_order ON emergency_plan_actions(plan_id, order_index);
+
+    CREATE TABLE IF NOT EXISTS emergency_executions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      plan_id INTEGER NOT NULL,
+      plan_name TEXT NOT NULL,
+      trigger_reason TEXT NOT NULL,
+      execution_type TEXT NOT NULL CHECK(execution_type IN ('simulate', 'real')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'completed', 'failed')),
+      started_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      initial_state TEXT,
+      final_state TEXT,
+      risk_assessment TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_emergency_executions_time ON emergency_executions(started_at);
+    CREATE INDEX IF NOT EXISTS idx_emergency_executions_status ON emergency_executions(status);
+
+    CREATE TABLE IF NOT EXISTS emergency_execution_actions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      execution_id INTEGER NOT NULL,
+      order_index INTEGER NOT NULL,
+      gate_id TEXT NOT NULL,
+      target_opening REAL NOT NULL,
+      previous_opening REAL,
+      actual_opening REAL,
+      status TEXT NOT NULL CHECK(status IN ('pending', 'success', 'failed', 'skipped')),
+      error_message TEXT,
+      executed_at INTEGER,
+      FOREIGN KEY (execution_id) REFERENCES emergency_executions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_emergency_exec_actions_exec ON emergency_execution_actions(execution_id);
   `);
   
   saveDatabase();

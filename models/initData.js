@@ -415,12 +415,65 @@ function initDemoPatrolRoute() {
   }
 }
 
+function initDemoEmergencyPlans() {
+  const existing = prepare('SELECT COUNT(*) as count FROM emergency_plans').get();
+  if (existing && existing.count > 0) return;
+
+  const now = Date.now();
+
+  const plan1Result = prepare(`
+    INSERT INTO emergency_plans (name, priority, effective_start_time, effective_end_time, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run('上游来水暴涨应急预案', 1, null, null, now, now);
+
+  const plan1Id = plan1Result.lastInsertRowid;
+
+  prepare(`
+    INSERT INTO emergency_plan_conditions (plan_id, type, target_id, operator, threshold, tolerance, duration_seconds)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(plan1Id, 'water_level', 'point_inlet', '>', 103.0, null, null);
+
+  const actions1 = [
+    { gateId: 'gate2', targetOpening: 20, adjustmentType: 'relative' },
+    { gateId: 'gate3', targetOpening: 20, adjustmentType: 'relative' },
+    { gateId: 'gate4', targetOpening: 20, adjustmentType: 'relative' }
+  ];
+
+  for (let i = 0; i < actions1.length; i++) {
+    prepare(`
+      INSERT INTO emergency_plan_actions (plan_id, order_index, gate_id, target_opening, adjustment_type)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(plan1Id, i, actions1[i].gateId, actions1[i].targetOpening, actions1[i].adjustmentType);
+  }
+
+  const plan2Result = prepare(`
+    INSERT INTO emergency_plans (name, priority, effective_start_time, effective_end_time, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run('分水闸故障保护预案', 2, null, null, now + 1, now + 1);
+
+  const plan2Id = plan2Result.lastInsertRowid;
+
+  prepare(`
+    INSERT INTO emergency_plan_conditions (plan_id, type, target_id, operator, threshold, tolerance, duration_seconds)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(plan2Id, 'gate_fault', 'gate3', '>', 0.3, 0.3, 60);
+
+  prepare(`
+    INSERT INTO emergency_plan_actions (plan_id, order_index, gate_id, target_opening, adjustment_type)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(plan2Id, 0, 'gate2', 0.3, 'absolute');
+
+  saveDatabase();
+  console.log('演示预案初始化完成: 2条应急预案');
+}
+
 module.exports = {
   initDemoTopology,
   generateHistoricalData,
   initSiltationDemoData,
   initGeoCoordinates,
   initDemoPatrolRoute,
+  initDemoEmergencyPlans,
   demoCanalSegments,
   demoGates
 };

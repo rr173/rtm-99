@@ -15,7 +15,9 @@ const systemRoutes = require('./routes/system');
 const siltationRoutes = require('./routes/siltation');
 const patrolRoutes = require('./routes/patrol');
 const waterBalanceRoutes = require('./routes/waterBalance');
+const emergencyRoutes = require('./routes/emergency');
 const waterBalanceService = require('./services/waterBalanceService');
+const { initDemoEmergencyPlans } = require('./models/initData');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -49,6 +51,7 @@ app.use('/api/system', systemRoutes);
 app.use('/api/siltation', siltationRoutes);
 app.use('/api/patrol', patrolRoutes);
 app.use('/api/water-balance', waterBalanceRoutes);
+app.use('/api/emergency', emergencyRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -89,6 +92,9 @@ async function startServer() {
     
     console.log('正在执行初始水量平衡计算...');
     waterBalanceService.calculateWaterBalance(30);
+    
+    console.log('正在初始化应急预案演示数据...');
+    initDemoEmergencyPlans();
     
     app.listen(PORT, () => {
       console.log('========================================');
@@ -135,6 +141,18 @@ async function startServer() {
       console.log('  GET  /api/water-balance/daily-report - 当日水量平衡日报');
       console.log('  POST /api/water-balance/threshold - 设置告警阈值');
       console.log('  GET  /api/water-balance/thresholds - 查询告警阈值');
+      console.log('');
+      console.log('应急联动接口:');
+      console.log('  POST /api/emergency/plans - 创建应急预案');
+      console.log('  GET  /api/emergency/plans - 预案列表');
+      console.log('  GET  /api/emergency/plans/:id - 预案详情');
+      console.log('  PUT  /api/emergency/plans/:id - 修改预案');
+      console.log('  DELETE /api/emergency/plans/:id - 删除预案');
+      console.log('  POST /api/emergency/check - 全量预案检测');
+      console.log('  POST /api/emergency/simulate/:planId - 预案演练');
+      console.log('  POST /api/emergency/execute/:planId - 执行预案');
+      console.log('  GET  /api/emergency/executions - 执行记录列表');
+      console.log('  GET  /api/emergency/executions/:id - 执行详情');
       console.log('');
     });
   } catch (err) {
