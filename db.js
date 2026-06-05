@@ -457,6 +457,52 @@ async function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_link_monitor_diagnostics_point ON link_monitor_diagnostics(point_id);
     CREATE INDEX IF NOT EXISTS idx_link_monitor_diagnostics_time ON link_monitor_diagnostics(diagnosis_time);
+
+    CREATE TABLE IF NOT EXISTS dispatch_irrigations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      gate_id TEXT NOT NULL,
+      daily_quota REAL NOT NULL,
+      priority INTEGER NOT NULL CHECK(priority BETWEEN 1 AND 5),
+      min_flow REAL NOT NULL,
+      max_flow REAL NOT NULL,
+      daily_taken REAL NOT NULL DEFAULT 0,
+      last_calc_time INTEGER,
+      quota_date TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dispatch_irrigations_priority ON dispatch_irrigations(priority);
+    CREATE INDEX IF NOT EXISTS idx_dispatch_irrigations_gate ON dispatch_irrigations(gate_id);
+
+    CREATE TABLE IF NOT EXISTS dispatch_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      inflow_rate REAL NOT NULL,
+      total_allocated REAL NOT NULL DEFAULT 0,
+      maintenance_flow REAL NOT NULL DEFAULT 0,
+      allocation_efficiency REAL NOT NULL DEFAULT 0,
+      is_applied INTEGER NOT NULL DEFAULT 0,
+      allocations_json TEXT NOT NULL,
+      under_provisioned_json TEXT,
+      warnings_json TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dispatch_records_time ON dispatch_records(timestamp);
+
+    CREATE TABLE IF NOT EXISTS dispatch_daily_summary (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL UNIQUE,
+      total_supply REAL NOT NULL DEFAULT 0,
+      total_taken REAL NOT NULL DEFAULT 0,
+      total_loss REAL NOT NULL DEFAULT 0,
+      irrigations_json TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dispatch_daily_summary_date ON dispatch_daily_summary(date);
   `);
   
   saveDatabase();

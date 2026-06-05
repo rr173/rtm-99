@@ -17,7 +17,9 @@ const patrolRoutes = require('./routes/patrol');
 const waterBalanceRoutes = require('./routes/waterBalance');
 const emergencyRoutes = require('./routes/emergency');
 const linkMonitorRoutes = require('./routes/linkMonitor');
+const dispatchRoutes = require('./routes/dispatch');
 const waterBalanceService = require('./services/waterBalanceService');
+const dispatchService = require('./services/dispatchService');
 const { initDemoEmergencyPlans, initLinkMonitorDemoData } = require('./models/initData');
 
 const app = express();
@@ -54,6 +56,7 @@ app.use('/api/patrol', patrolRoutes);
 app.use('/api/water-balance', waterBalanceRoutes);
 app.use('/api/emergency', emergencyRoutes);
 app.use('/api/link-monitor', linkMonitorRoutes);
+app.use('/api/dispatch', dispatchRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -100,6 +103,9 @@ async function startServer() {
     
     console.log('正在初始化链路监控数据...');
     initLinkMonitorDemoData();
+    
+    console.log('正在初始化灌区配水调度数据...');
+    dispatchService.initDemoIrrigations();
     
     app.listen(PORT, () => {
       console.log('========================================');
@@ -167,6 +173,17 @@ async function startServer() {
       console.log('  GET  /api/link-monitor/quality/:pointId - 单测点数据质量诊断');
       console.log('  GET  /api/link-monitor/report - 链路健康日报');
       console.log('  POST /api/link-monitor/simulate-outage - 模拟测点离线');
+      console.log('');
+      console.log('渠道配水调度接口:');
+      console.log('  POST /api/dispatch/irrigations - 创建灌区');
+      console.log('  GET  /api/dispatch/irrigations - 灌区列表(含当日已取水量和剩余配额)');
+      console.log('  GET  /api/dispatch/irrigations/:id - 灌区详情');
+      console.log('  PUT  /api/dispatch/irrigations/:id - 修改灌区参数');
+      console.log('  DELETE /api/dispatch/irrigations/:id - 删除灌区');
+      console.log('  POST /api/dispatch/optimize - 执行调度优化计算');
+      console.log('  POST /api/dispatch/apply - 应用最近一次优化结果');
+      console.log('  GET  /api/dispatch/history?days= - 最近N天调度记录');
+      console.log('  GET  /api/dispatch/daily-summary - 当日配水汇总');
       console.log('');
     });
   } catch (err) {
