@@ -252,6 +252,33 @@ function accumulateIrrigationsWaterUsage() {
   }
 }
 
+function aggregateGateOpenings(allocations, gateMap) {
+  const gateFlowMap = {};
+  for (const alloc of allocations) {
+    if (!gateFlowMap[alloc.gate_id]) {
+      gateFlowMap[alloc.gate_id] = 0;
+    }
+    gateFlowMap[alloc.gate_id] += alloc.suggested_flow || 0;
+  }
+
+  const gateOpeningMap = {};
+  for (const gateId in gateFlowMap) {
+    const gate = gateMap[gateId];
+    if (!gate) continue;
+    const totalFlow = gateFlowMap[gateId];
+    const H_up = getGateUpstreamDepth(gate);
+    const opening = totalFlow > 0
+      ? solveGateOpeningForFlow(totalFlow, gate, H_up)
+      : 0;
+    gateOpeningMap[gateId] = {
+      total_flow: Math.round(totalFlow * 10000) / 10000,
+      unified_opening: Math.round(opening * 10000) / 10000
+    };
+  }
+
+  return { gateFlowMap, gateOpeningMap };
+}
+
 function optimizeDispatch(inflowRate) {
   accumulateIrrigationsWaterUsage();
 
@@ -298,7 +325,6 @@ function optimizeDispatch(inflowRate) {
         gate_id: irrig.gate_id,
         priority: irrig.priority,
         suggested_flow: 0,
-        suggested_opening: 0,
         status: 'quota_exhausted',
         remaining_quota: 0,
         min_flow: irrig.min_flow,
@@ -337,7 +363,6 @@ function optimizeDispatch(inflowRate) {
         gate_id: irrig.gate_id,
         priority: irrig.priority,
         suggested_flow: 0,
-        suggested_opening: 0,
         status: 'under_provisioned',
         remaining_quota: remaining,
         min_flow: irrig.min_flow,
@@ -363,7 +388,6 @@ function optimizeDispatch(inflowRate) {
         gate_id: irrig.gate_id,
         priority: irrig.priority,
         suggested_flow: 0,
-        suggested_opening: 0,
         status: 'under_provisioned',
         remaining_quota: remaining,
         min_flow: irrig.min_flow,
@@ -373,8 +397,7 @@ function optimizeDispatch(inflowRate) {
     }
 
     const H_up = getGateUpstreamDepth(gate);
-    const suggestedOpening = solveGateOpeningForFlow(candidateFlow, gate, H_up);
-    const actualFlow = calculateWeirFlow(gate.discharge_coeff, gate.gate_width, suggestedOpening, H_up);
+    const actualFlow = candidateFlow;
 
     currentAvailable -= actualFlow;
     totalAllocated += actualFlow;
@@ -385,12 +408,26 @@ function optimizeDispatch(inflowRate) {
       gate_id: irrig.gate_id,
       priority: irrig.priority,
       suggested_flow: Math.round(actualFlow * 10000) / 10000,
-      suggested_opening: Math.round(suggestedOpening * 10000) / 10000,
       status: 'allocated',
       remaining_quota: Math.round(remaining * 10000) / 10000,
       min_flow: irrig.min_flow,
       max_flow: irrig.max_flow
     });
+  }
+
+  const { gateFlowMap, gateOpeningMap } = aggregateGateOpenings(allocations, gateMap);
+
+  for (const alloc of allocations) {
+    const gateInfo = gateOpeningMap[alloc.gate_id];
+    if (gateInfo) {
+      alloc.gate_total_flow = gateInfo.total_flow;
+      alloc.gate_unified_opening = gateInfo.unified_opening;
+      alloc.suggested_opening = gateInfo.unified_opening;
+    } else {
+      alloc.gate_total_flow = 0;
+      alloc.gate_unified_opening = 0;
+      alloc.suggested_opening = 0;
+    }
   }
 
   const totalInflow = inflowRate;
@@ -406,6 +443,24 @@ function optimizeDispatch(inflowRate) {
     remaining_unallocated: Math.round(Math.max(0, totalInflow - totalAllocated - reservedMaintenance) * 10000) / 10000,
     allocation_efficiency_percent: allocationEfficiency
   };
+
+  const gate_plan = [];
+  for (const gateId in gateOpeningMap) {
+    const gate = gateMap[gateId];
+    gate_plan.push({
+      gate_id: gateId,
+      gate_name: gate ? gate.name : null,
+      total_flow: gateOpeningMap[gateId].total_flow,
+      unified_opening: gateOpeningMap[gateId].unified_opening,
+      shared_by_irrigations: allocations
+        .filter(a => a.gate_id === gateId && a.status === 'allocated')
+        .map(a => ({
+          irrigation_id: a.irrigation_id,
+          irrigation_name: a.irrigation_name,
+          share_flow: a.suggested_flow
+        }))
+    });
+  }
 
   const record = {
     timestamp: Date.now(),
@@ -423,18 +478,24 @@ function optimizeDispatch(inflowRate) {
     allocations,
     under_provisioned: underProvisioned,
     water_balance: waterBalance,
+    gate_plan: gate_plan,
     is_water_restriction_mode: isWaterRestrictionMode,
     _record: record
   };
 }
 
 function checkWaterLevelSafety(allocations) {
-  const adjustments = allocations
-    .filter(a => a.status === 'allocated' && a.suggested_opening > 0)
-    .map(a => ({
-      gateId: a.gate_id,
-      newOpening: a.suggested_opening
-    }));
+  const seenGates = {};
+  const adjustments = [];
+  for (const a of allocations) {
+    if (a.suggested_opening > 0 && !seenGates[a.gate_id]) {
+      seenGates[a.gate_id] = true;
+      adjustments.push({
+        gateId: a.gate_id,
+        newOpening: a.suggested_opening
+      });
+    }
+  }
 
   if (adjustments.length === 0) {
     return { safe: true, violations: [] };
@@ -527,29 +588,63 @@ function applyDispatch(recordId) {
     };
   }
 
-  const applied = [];
+  const gateAdjustments = {};
   for (const alloc of allocations) {
-    try {
-      const newOpening = stateManager.updateGateOpening(alloc.gate_id, alloc.suggested_opening);
-      applied.push({
-        irrigation_id: alloc.irrigation_id,
-        irrigation_name: alloc.irrigation_name,
+    if (!gateAdjustments[alloc.gate_id]) {
+      gateAdjustments[alloc.gate_id] = {
         gate_id: alloc.gate_id,
-        target_opening: alloc.suggested_opening,
-        actual_opening: newOpening,
-        target_flow: alloc.suggested_flow,
+        unified_opening: alloc.gate_unified_opening != null ? alloc.gate_unified_opening : alloc.suggested_opening,
+        total_flow: alloc.gate_total_flow || 0,
+        irrigations: []
+      };
+    }
+    gateAdjustments[alloc.gate_id].irrigations.push({
+      irrigation_id: alloc.irrigation_id,
+      irrigation_name: alloc.irrigation_name,
+      share_flow: alloc.suggested_flow,
+      status: alloc.status
+    });
+  }
+
+  const appliedGates = [];
+  for (const gateId in gateAdjustments) {
+    const ga = gateAdjustments[gateId];
+    try {
+      const actualOpening = stateManager.updateGateOpening(gateId, ga.unified_opening);
+      appliedGates.push({
+        gate_id: gateId,
+        target_opening: ga.unified_opening,
+        actual_opening: actualOpening,
+        total_flow: ga.total_flow,
+        irrigations: ga.irrigations,
         status: 'success'
       });
     } catch (err) {
-      applied.push({
-        irrigation_id: alloc.irrigation_id,
-        irrigation_name: alloc.irrigation_name,
-        gate_id: alloc.gate_id,
-        target_opening: alloc.suggested_opening,
+      appliedGates.push({
+        gate_id: gateId,
+        target_opening: ga.unified_opening,
         actual_opening: null,
-        target_flow: alloc.suggested_flow,
+        total_flow: ga.total_flow,
+        irrigations: ga.irrigations,
         status: 'failed',
         error: err.message
+      });
+    }
+  }
+
+  const applied = [];
+  for (const ga of appliedGates) {
+    for (const irr of ga.irrigations) {
+      applied.push({
+        irrigation_id: irr.irrigation_id,
+        irrigation_name: irr.irrigation_name,
+        gate_id: ga.gate_id,
+        target_opening: ga.target_opening,
+        actual_opening: ga.actual_opening,
+        target_flow: irr.share_flow,
+        irrigation_status: irr.status,
+        gate_status: ga.status,
+        gate_error: ga.error
       });
     }
   }
@@ -576,6 +671,7 @@ function applyDispatch(recordId) {
     success: true,
     record_id: recordId,
     applied_at: now,
+    applied_gates: appliedGates,
     applied: applied,
     safety_check: {
       safe: safetyCheck.safe,

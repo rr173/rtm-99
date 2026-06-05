@@ -241,6 +241,7 @@ router.post('/optimize', (req, res) => {
       allocations: result.allocations,
       under_provisioned: result.under_provisioned,
       water_balance: result.water_balance,
+      gate_plan: result.gate_plan,
       is_water_restriction_mode: result.is_water_restriction_mode,
       safety_preview: {
         safe: safetyCheck.safe,
