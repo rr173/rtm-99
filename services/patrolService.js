@@ -64,9 +64,6 @@ function createRoute(name, estimatedDurationMinutes, checkpoints) {
       checkpoints[i + 1].latitude, checkpoints[i + 1].longitude
     );
     
-    if (distance < 2) {
-      throw new Error(`第${i + 1}个和第${i + 2}个巡检点距离过近(${Math.round(distance)}m)，相邻点间距至少需要2米`);
-    }
     if (distance > 10000) {
       throw new Error(`第${i + 1}个和第${i + 2}个巡检点距离过远(${Math.round(distance)}m)，相邻点间距不能超过10公里`);
     }
@@ -286,7 +283,7 @@ function checkTaskCompletion(taskId, timestamp) {
 
 function checkTaskTimeout(taskId, timestamp) {
   const task = prepare('SELECT * FROM patrol_tasks WHERE id = ?').get(taskId);
-  if (!task || task.status !== 'in_progress') return;
+  if (!task || (task.status !== 'in_progress' && task.status !== 'pending')) return;
 
   const route = prepare('SELECT * FROM patrol_routes WHERE id = ?').get(task.route_id);
   if (!route) return;
@@ -308,7 +305,7 @@ function getTaskList() {
   const now = Date.now();
 
   for (const task of tasks) {
-    if (task.status === 'in_progress') {
+    if (task.status === 'in_progress' || task.status === 'pending') {
       checkTaskTimeout(task.id, now);
       task.status = prepare('SELECT status FROM patrol_tasks WHERE id = ?').get(task.id).status;
     }
@@ -335,7 +332,7 @@ function getTaskDetail(taskId) {
     return null;
   }
 
-  if (task.status === 'in_progress') {
+  if (task.status === 'in_progress' || task.status === 'pending') {
     checkTaskTimeout(task.id, Date.now());
     Object.assign(task, prepare('SELECT * FROM patrol_tasks WHERE id = ?').get(id));
   }
