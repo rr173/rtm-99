@@ -2,6 +2,7 @@ const { prepare } = require('../db');
 const stateManager = require('./stateManager');
 const predictionService = require('./predictionService');
 const hydraulicEngine = require('./hydraulicEngine');
+const siltationService = require('./siltationService');
 
 function createPlan(planData) {
   const { name, conditions, actions, priority = 3, effectiveStartTime, effectiveEndTime } = planData;
@@ -223,29 +224,43 @@ function checkWaterLevelCondition(condition) {
   };
 }
 
+function recordGateDeviation(gateId, deviation) {
+  const pointId = `gate_${gateId}_deviation`;
+  prepare(`
+    INSERT INTO water_level_history (point_id, water_level, timestamp)
+    VALUES (?, ?, ?)
+  `).run(pointId, deviation, Date.now());
+}
+
 function checkGateFaultCondition(condition) {
   const gate = prepare('SELECT * FROM gates WHERE id = ?').get(condition.targetId);
   if (!gate) {
     return { triggered: false, currentValue: null };
   }
 
-  const targetOpening = stateManager.getGateState(condition.targetId)?.target_opening || gate.current_opening;
+  const gateState = stateManager.getGateState(condition.targetId);
+  const targetOpening = gateState?.target_opening ?? gate.current_opening;
   const deviation = Math.abs(gate.current_opening - targetOpening);
-  const tolerance = condition.tolerance || 0.1;
+  const tolerance = condition.tolerance ?? 0.1;
+
+  recordGateDeviation(condition.targetId, deviation);
 
   let triggered = deviation > tolerance;
 
   if (condition.duration_seconds && triggered) {
-    const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
+    const startTime = Date.now() - condition.duration_seconds * 1000;
     const recentDeviations = prepare(`
       SELECT water_level FROM water_level_history 
       WHERE point_id = ? AND timestamp > ?
-      ORDER BY timestamp DESC LIMIT 20
-    `).all(`gate_${condition.targetId}_deviation`, tenMinutesAgo);
+      ORDER BY timestamp DESC
+    `).all(`gate_${condition.targetId}_deviation`, startTime);
+
+    const allAboveTolerance = recentDeviations.length > 0 && 
+      recentDeviations.every(d => d.water_level > tolerance);
     
-    if (recentDeviations.length < 3) {
-      triggered = false;
-    }
+    const hasEnoughData = recentDeviations.length >= Math.min(10, Math.floor(condition.duration_seconds / 10));
+    
+    triggered = allAboveTolerance && hasEnoughData;
   }
 
   return {
@@ -632,19 +647,21 @@ async function executePlan(planId) {
     }
 
     try {
+      const previousOpening = gate.current_opening;
       const actualOpening = stateManager.updateGateOpening(action.gateId, targetOpening);
       
+      updateSystemStateAfterAdjustment();
       await delay(10000);
 
       actionResults.push({
         orderIndex: i,
         gateId: action.gateId,
         gateName: gate.name,
-        previousOpening: gate.current_opening,
+        previousOpening: previousOpening,
         actualOpening: actualOpening,
         status: 'success'
       });
-      recordExecutionAction(executionId, i, action.gateId, targetOpening, 'success', null, gate.current_opening, actualOpening);
+      recordExecutionAction(executionId, i, action.gateId, targetOpening, 'success', null, previousOpening, actualOpening);
     } catch (err) {
       actionResults.push({
         orderIndex: i,
@@ -686,6 +703,58 @@ function recordExecutionAction(executionId, orderIndex, gateId, targetOpening, s
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function updateSystemStateAfterAdjustment() {
+  const segments = prepare('SELECT * FROM canal_segments ORDER BY order_index').all();
+  const gates = prepare('SELECT * FROM gates').all();
+  const points = prepare('SELECT * FROM measurement_points').all();
+
+  const underConstructionIds = siltationService.getUnderConstructionSegmentIds();
+  const segmentsForHydraulics = segments.map(seg => {
+    if (underConstructionIds.includes(seg.id)) {
+      return { ...seg, siltation_depth: seg.design_water_level };
+    }
+    return seg;
+  });
+
+  const firstGate = gates.find(g => g.position_on_segment <= 0.01 && g.canal_segment_id === segments[0].id);
+  let headwaterDepth = 2.5;
+  if (firstGate) {
+    const gatePoints = points.filter(p => p.gate_id === firstGate.id && p.type === 'upstream_gate');
+    if (gatePoints.length > 0) {
+      const hwLevel = stateManager.getCurrentWaterLevel(gatePoints[0].id);
+      if (hwLevel !== null) {
+        headwaterDepth = hwLevel - segments[0].bottom_elevation;
+      }
+    }
+  }
+
+  const steadyState = hydraulicEngine.computeSteadyState(segmentsForHydraulics, gates, headwaterDepth);
+
+  const now = Date.now();
+  for (const point of points) {
+    const seg = segments.find(s => s.id === point.canal_segment_id);
+    const ss = seg ? steadyState[seg.id] : null;
+    if (ss) {
+      const distRatio = point.distance_from_upstream / seg.length;
+      const waterLevel = ss.upstreamLevel + distRatio * (ss.downstreamLevel - ss.upstreamLevel);
+      stateManager.updateWaterLevel(point.id, waterLevel, now);
+    }
+  }
+
+  for (const gate of gates) {
+    const seg = segments.find(s => s.id === gate.canal_segment_id);
+    const ss = seg ? steadyState[seg.id] : null;
+    if (ss) {
+      const gateState = stateManager.getGateState(gate.id);
+      if (gateState) {
+        gateState.discharge = gate.type === 'diversion' ? ss.diversionFlow : ss.flow;
+      }
+    }
+  }
+
+  return steadyState;
 }
 
 function compareStates(initial, final) {

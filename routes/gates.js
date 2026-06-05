@@ -113,4 +113,34 @@ router.put('/:id', (req, res) => {
   }
 });
 
+router.put('/:id/target-opening', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { opening } = req.body;
+    
+    if (opening === undefined || typeof opening !== 'number') {
+      return res.status(400).json({ error: '开度值必须是数字' });
+    }
+    
+    const gate = prepare('SELECT * FROM gates WHERE id = ?').get(id);
+    if (!gate) {
+      return res.status(404).json({ error: '闸门不存在' });
+    }
+    
+    const targetOpening = stateManager.setGateTargetOpening(id, opening);
+    
+    res.json({
+      success: true,
+      message: `闸门 ${gate.name} 目标开度已设置 (用于测试闸门故障)`,
+      targetOpening: targetOpening,
+      currentOpening: gate.current_opening,
+      deviation: Math.abs(gate.current_opening - targetOpening),
+      timestamp: Date.now()
+    });
+  } catch (err) {
+    console.error('Set gate target opening error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

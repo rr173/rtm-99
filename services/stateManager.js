@@ -23,6 +23,7 @@ function initState() {
   for (const gate of gates) {
     currentState.gateStates[gate.id] = {
       current_opening: gate.current_opening,
+      target_opening: gate.current_opening,
       discharge: 0
     };
   }
@@ -122,10 +123,22 @@ function updateGateOpening(gateId, newOpening) {
 
   currentState.gateStates[gateId] = {
     ...currentState.gateStates[gateId],
-    current_opening: clampedOpening
+    current_opening: clampedOpening,
+    target_opening: clampedOpening
   };
 
   return clampedOpening;
+}
+
+function setGateTargetOpening(gateId, targetOpening) {
+  if (!currentState.gateStates[gateId]) return null;
+
+  currentState.gateStates[gateId] = {
+    ...currentState.gateStates[gateId],
+    target_opening: targetOpening
+  };
+
+  return targetOpening;
 }
 
 function getState() {
@@ -141,5 +154,6 @@ module.exports = {
   updateWaterLevelsBatch,
   getGateState,
   updateGateOpening,
+  setGateTargetOpening,
   getState
 };
