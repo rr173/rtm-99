@@ -647,6 +647,9 @@ async function executePlan(planId) {
     }
 
     try {
+      if (stateManager.isGateLocked(action.gateId)) {
+        throw new Error('该闸门因维护计划锁定中');
+      }
       const previousOpening = gate.current_opening;
       const actualOpening = stateManager.updateGateOpening(action.gateId, targetOpening);
       

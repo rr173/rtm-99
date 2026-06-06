@@ -552,6 +552,29 @@ async function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_patrol_work_order_timeline_wo ON patrol_work_order_timeline(work_order_id, timestamp);
+
+    CREATE TABLE IF NOT EXISTS maintenance_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      segment_id TEXT NOT NULL,
+      plan_start_time INTEGER NOT NULL,
+      duration_hours REAL NOT NULL,
+      maintenance_type TEXT NOT NULL CHECK(maintenance_type IN ('lining', 'clearing', 'equipment', 'inspection')),
+      responsible_person TEXT,
+      status TEXT NOT NULL DEFAULT 'scheduled' CHECK(status IN ('scheduled', 'active', 'completed', 'cancelled')),
+      impact_assessment_json TEXT,
+      alternative_supply_json TEXT,
+      gate_snapshot_json TEXT,
+      created_at INTEGER NOT NULL,
+      started_at INTEGER,
+      completed_at INTEGER,
+      cancelled_at INTEGER,
+      notes TEXT,
+      FOREIGN KEY (segment_id) REFERENCES canal_segments(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_maintenance_plans_status ON maintenance_plans(status);
+    CREATE INDEX IF NOT EXISTS idx_maintenance_plans_segment ON maintenance_plans(segment_id);
+    CREATE INDEX IF NOT EXISTS idx_maintenance_plans_start_time ON maintenance_plans(plan_start_time);
   `);
   
   saveDatabase();

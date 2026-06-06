@@ -18,6 +18,7 @@ const waterBalanceRoutes = require('./routes/waterBalance');
 const emergencyRoutes = require('./routes/emergency');
 const linkMonitorRoutes = require('./routes/linkMonitor');
 const dispatchRoutes = require('./routes/dispatch');
+const maintenanceRoutes = require('./routes/maintenance');
 const waterBalanceService = require('./services/waterBalanceService');
 const dispatchService = require('./services/dispatchService');
 const { initDemoEmergencyPlans, initLinkMonitorDemoData } = require('./models/initData');
@@ -57,6 +58,7 @@ app.use('/api/water-balance', waterBalanceRoutes);
 app.use('/api/emergency', emergencyRoutes);
 app.use('/api/link-monitor', linkMonitorRoutes);
 app.use('/api/dispatch', dispatchRoutes);
+app.use('/api/maintenance', maintenanceRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -184,6 +186,15 @@ async function startServer() {
       console.log('  POST /api/dispatch/apply - 应用最近一次优化结果');
       console.log('  GET  /api/dispatch/history?days= - 最近N天调度记录');
       console.log('  GET  /api/dispatch/daily-summary - 当日配水汇总');
+      console.log('');
+      console.log('渠段维护与停水协调接口:');
+      console.log('  POST /api/maintenance/plans - 创建维护计划');
+      console.log('  GET  /api/maintenance/plans - 维护计划列表');
+      console.log('  GET  /api/maintenance/plans/:id - 维护计划详情(含影响评估和替代方案)');
+      console.log('  PUT  /api/maintenance/plans/:id/cancel - 取消维护计划');
+      console.log('  PUT  /api/maintenance/plans/:id/start - 开始维护(联动闸门)');
+      console.log('  PUT  /api/maintenance/plans/:id/complete - 完成维护(恢复闸门)');
+      console.log('  GET  /api/maintenance/impact/:segmentId?durationHours= - 预评估停水影响');
       console.log('');
     });
   } catch (err) {

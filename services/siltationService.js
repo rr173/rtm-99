@@ -263,7 +263,19 @@ function getUnderConstructionSegmentIds() {
     SELECT DISTINCT segment_id FROM work_orders
     WHERE status IN ('pending', 'in_progress') AND planned_date <= ?
   `).all(today);
-  return activeOrders.map(o => o.segment_id);
+  
+  const maintenanceIds = prepare(`
+    SELECT DISTINCT segment_id FROM maintenance_plans
+    WHERE status = 'active'
+  `).all();
+  
+  const allIds = [...activeOrders.map(o => o.segment_id)];
+  for (const m of maintenanceIds) {
+    if (!allIds.includes(m.segment_id)) {
+      allIds.push(m.segment_id);
+    }
+  }
+  return allIds;
 }
 
 function isSegmentUnderConstruction(segmentId) {
@@ -272,7 +284,15 @@ function isSegmentUnderConstruction(segmentId) {
     SELECT COUNT(*) as c FROM work_orders
     WHERE segment_id = ? AND status IN ('pending', 'in_progress') AND planned_date <= ?
   `).get(segmentId, today);
-  return active.c > 0;
+  
+  if (active.c > 0) return true;
+  
+  const maintenance = prepare(`
+    SELECT COUNT(*) as c FROM maintenance_plans
+    WHERE segment_id = ? AND status = 'active'
+  `).get(segmentId);
+  
+  return maintenance.c > 0;
 }
 
 module.exports = {

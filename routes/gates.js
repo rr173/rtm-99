@@ -58,6 +58,8 @@ router.get('/:id', (req, res) => {
     
     const discharge = getSteadyStateDischarge(gate);
     
+    const lockInfo = stateManager.getGateLockInfo(id);
+    
     res.json({
       ...gate,
       currentUpstreamLevel: hUp,
@@ -66,7 +68,9 @@ router.get('/:id', (req, res) => {
       currentDownstreamDepth: hDown !== null && seg ? hDown - seg.bottom_elevation : null,
       currentDischarge: Math.round(discharge * 1000) / 1000,
       upstreamPointId: upPoint?.id,
-      downstreamPointId: downPoint?.id
+      downstreamPointId: downPoint?.id,
+      locked: lockInfo.locked,
+      lockInfo: lockInfo
     });
   } catch (err) {
     console.error('Get gate error:', err);
@@ -81,6 +85,14 @@ router.put('/:id', (req, res) => {
     
     if (opening === undefined || typeof opening !== 'number') {
       return res.status(400).json({ error: '开度值必须是数字' });
+    }
+    
+    if (stateManager.isGateLocked(id)) {
+      const lockInfo = stateManager.getGateLockInfo(id);
+      return res.status(403).json({ 
+        error: '该闸门因维护计划锁定中',
+        lockInfo: lockInfo
+      });
     }
     
     const gate = prepare('SELECT * FROM gates WHERE id = ?').get(id);
@@ -120,6 +132,14 @@ router.put('/:id/target-opening', (req, res) => {
     
     if (opening === undefined || typeof opening !== 'number') {
       return res.status(400).json({ error: '开度值必须是数字' });
+    }
+    
+    if (stateManager.isGateLocked(id)) {
+      const lockInfo = stateManager.getGateLockInfo(id);
+      return res.status(403).json({ 
+        error: '该闸门因维护计划锁定中',
+        lockInfo: lockInfo
+      });
     }
     
     const gate = prepare('SELECT * FROM gates WHERE id = ?').get(id);

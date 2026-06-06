@@ -3,6 +3,7 @@ const { prepare, saveDatabase } = require('../db');
 const currentState = {
   waterLevels: {},
   gateStates: {},
+  gateLocks: {},
   lastUpdate: Date.now()
 };
 
@@ -26,6 +27,35 @@ function initState() {
       target_opening: gate.current_opening,
       discharge: 0
     };
+    currentState.gateLocks[gate.id] = {
+      locked: false,
+      reason: null,
+      maintenance_plan_id: null,
+      locked_at: null
+    };
+  }
+
+  const activePlans = prepare(`
+    SELECT id, segment_id FROM maintenance_plans WHERE status = 'active'
+  `).all();
+  
+  for (const plan of activePlans) {
+    const upstreamGates = prepare(`
+      SELECT g.id FROM gates g
+      WHERE g.canal_segment_id = ? AND g.position_on_segment <= 0.01
+      UNION
+      SELECT g.id FROM gates g
+      WHERE g.canal_segment_id = ? AND g.type = 'regulator'
+    `).all(plan.segment_id, plan.segment_id);
+    
+    for (const gate of upstreamGates) {
+      currentState.gateLocks[gate.id] = {
+        locked: true,
+        reason: 'maintenance',
+        maintenance_plan_id: plan.id,
+        locked_at: Date.now()
+      };
+    }
   }
 
   currentState.lastUpdate = Date.now();
@@ -145,6 +175,55 @@ function getState() {
   return { ...currentState };
 }
 
+function isGateLocked(gateId) {
+  const lock = currentState.gateLocks[gateId];
+  return lock ? lock.locked : false;
+}
+
+function getGateLockInfo(gateId) {
+  return currentState.gateLocks[gateId] || { locked: false, reason: null, maintenance_plan_id: null, locked_at: null };
+}
+
+function lockGate(gateId, reason, maintenancePlanId) {
+  if (!currentState.gateLocks[gateId]) {
+    currentState.gateLocks[gateId] = {
+      locked: false,
+      reason: null,
+      maintenance_plan_id: null,
+      locked_at: null
+    };
+  }
+  currentState.gateLocks[gateId] = {
+    locked: true,
+    reason: reason || 'maintenance',
+    maintenance_plan_id: maintenancePlanId || null,
+    locked_at: Date.now()
+  };
+  return currentState.gateLocks[gateId];
+}
+
+function unlockGate(gateId) {
+  if (!currentState.gateLocks[gateId]) {
+    currentState.gateLocks[gateId] = {
+      locked: false,
+      reason: null,
+      maintenance_plan_id: null,
+      locked_at: null
+    };
+  }
+  currentState.gateLocks[gateId] = {
+    locked: false,
+    reason: null,
+    maintenance_plan_id: null,
+    locked_at: null
+  };
+  return currentState.gateLocks[gateId];
+}
+
+function getAllGateLocks() {
+  return { ...currentState.gateLocks };
+}
+
 module.exports = {
   initState,
   getCurrentWaterLevel,
@@ -155,5 +234,10 @@ module.exports = {
   getGateState,
   updateGateOpening,
   setGateTargetOpening,
-  getState
+  getState,
+  isGateLocked,
+  getGateLockInfo,
+  lockGate,
+  unlockGate,
+  getAllGateLocks
 };

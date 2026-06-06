@@ -610,6 +610,10 @@ function applyDispatch(recordId) {
   for (const gateId in gateAdjustments) {
     const ga = gateAdjustments[gateId];
     try {
+      if (stateManager.isGateLocked(gateId)) {
+        const lockInfo = stateManager.getGateLockInfo(gateId);
+        throw new Error('该闸门因维护计划锁定中');
+      }
       const actualOpening = stateManager.updateGateOpening(gateId, ga.unified_opening);
       appliedGates.push({
         gate_id: gateId,
