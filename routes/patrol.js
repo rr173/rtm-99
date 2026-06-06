@@ -407,16 +407,9 @@ router.put('/work-orders/:id/verify', (req, res) => {
 router.put('/work-orders/:id/reprocess', (req, res) => {
   try {
     const { id } = req.params;
-    const { description, measures, operator } = req.body;
+    const { operator } = req.body;
 
-    if (!description) {
-      return res.status(400).json({ error: 'description 处理描述不能为空' });
-    }
-    if (!measures) {
-      return res.status(400).json({ error: 'measures 处理措施不能为空' });
-    }
-
-    const result = patrolService.reprocessWorkOrder(parseInt(id), description, measures, operator);
+    const result = patrolService.reprocessWorkOrder(parseInt(id), operator);
     res.json({
       success: true,
       work_order: result

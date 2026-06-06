@@ -751,31 +751,25 @@ function verifyWorkOrder(id, result, opinion, operator) {
   return getWorkOrderDetail(woId);
 }
 
-function reprocessWorkOrder(id, description, measures, operator) {
+function reprocessWorkOrder(id, operator) {
   const woId = parseInt(id);
   const wo = prepare('SELECT * FROM patrol_work_orders WHERE id = ?').get(woId);
   if (!wo) {
     throw new Error('工单不存在');
   }
   if (wo.status !== 'rejected') {
-    throw new Error('只有已打回的工单才能重新提交,当前状态:' + wo.status);
-  }
-  if (!description || typeof description !== 'string' || description.trim().length === 0) {
-    throw new Error('处理描述不能为空');
-  }
-  if (!measures || typeof measures !== 'string' || measures.trim().length === 0) {
-    throw new Error('处理措施不能为空');
+    throw new Error('只有已打回的工单才能重新处理,当前状态:' + wo.status);
   }
 
   const now = Date.now();
   prepare(`
     UPDATE patrol_work_orders 
-    SET status = 'verifying', process_description = ?, process_measures = ?, processed_at = ?
+    SET status = 'processing'
     WHERE id = ?
-  `).run(description, measures, now, woId);
+  `).run(woId);
 
-  addTimelineEntry(woId, 'rejected', 'verifying', operator || wo.handler_name, 
-    '重新提交处理结果,等待验收');
+  addTimelineEntry(woId, 'rejected', 'processing', operator || wo.handler_name, 
+    '处理人返工,重新开始处理');
 
   return getWorkOrderDetail(woId);
 }
@@ -820,10 +814,9 @@ function getOverdueWorkOrders() {
     if (targetLevel <= currentLevel) continue;
 
     const lastEscalated = wo.last_escalated_at || 0;
-    if (now - lastEscalated < ESCALATION_INTERVAL_MS) continue;
+    if (now - lastEscalated < ESCALATION_INTERVAL_MS && targetLevel === currentLevel + 1) continue;
 
-    const nextLevel = Math.min(currentLevel + 1, targetLevel, 2);
-    const newSeverity = SEVERITY_BY_LEVEL[nextLevel];
+    const newSeverity = SEVERITY_BY_LEVEL[targetLevel];
     const oldSeverity = wo.anomaly_severity;
     const escalationNote = `超时自动升级(${Math.round(overdueHours)}h): ${oldSeverity} -> ${newSeverity}`;
 
@@ -892,6 +885,29 @@ function getStartOfWeek(ts) {
   return d.getTime();
 }
 
+function calculateProcessingDurationHours(workOrderId) {
+  const timeline = prepare(`
+    SELECT status_from, status_to, timestamp
+    FROM patrol_work_order_timeline
+    WHERE work_order_id = ?
+    ORDER BY timestamp ASC
+  `).all(workOrderId);
+
+  let totalMs = 0;
+  let processingStart = null;
+
+  for (const entry of timeline) {
+    if (entry.status_to === 'processing') {
+      processingStart = entry.timestamp;
+    } else if (processingStart !== null && 
+               (entry.status_to === 'verifying' || entry.status_to === 'closed' || entry.status_to === 'rejected')) {
+      totalMs += entry.timestamp - processingStart;
+      processingStart = null;
+    }
+  }
+  return totalMs / 3600000;
+}
+
 function getWorkOrderDashboard() {
   const now = Date.now();
   const weekStart = getStartOfWeek(now);
@@ -907,15 +923,25 @@ function getWorkOrderDashboard() {
     statusMap[s.status] = s.count;
   }
 
-  const avgProcessResult = prepare(`
-    SELECT AVG(pwo.closed_at - pwo.assigned_at) as avg_ms
-    FROM patrol_work_orders pwo
-    WHERE pwo.status = 'closed' 
-      AND pwo.assigned_at IS NOT NULL 
-      AND pwo.closed_at IS NOT NULL
-  `).get();
-  const avgProcessingHours = avgProcessResult && avgProcessResult.avg_ms 
-    ? Math.round((avgProcessResult.avg_ms / 3600000) * 100) / 100 
+  const closedWOs = prepare(`
+    SELECT id, assigned_at, closed_at
+    FROM patrol_work_orders
+    WHERE status = 'closed'
+      AND assigned_at IS NOT NULL
+      AND closed_at IS NOT NULL
+  `).all();
+
+  let totalProcessingHours = 0;
+  let totalTurnaroundHours = 0;
+  for (const wo of closedWOs) {
+    totalProcessingHours += calculateProcessingDurationHours(wo.id);
+    totalTurnaroundHours += (wo.closed_at - wo.assigned_at) / 3600000;
+  }
+  const avgProcessingHours = closedWOs.length > 0
+    ? Math.round((totalProcessingHours / closedWOs.length) * 100) / 100
+    : 0;
+  const avgTurnaroundHours = closedWOs.length > 0
+    ? Math.round((totalTurnaroundHours / closedWOs.length) * 100) / 100
     : 0;
 
   const totalResult = prepare('SELECT COUNT(*) as total FROM patrol_work_orders').get();
@@ -931,22 +957,33 @@ function getWorkOrderDashboard() {
   const overdueCount = overdueResult ? overdueResult.cnt : 0;
   const overdueRate = total > 0 ? Math.round((overdueCount / total) * 10000) / 100 : 0;
 
-  const handlerStats = prepare(`
-    SELECT 
-      pwo.handler_name,
-      SUM(CASE WHEN pwo.status = 'closed' THEN 1 ELSE 0 END) as completed_count,
-      AVG(CASE WHEN pwo.status = 'closed' AND pwo.assigned_at IS NOT NULL AND pwo.closed_at IS NOT NULL 
-          THEN (pwo.closed_at - pwo.assigned_at) / 3600000 ELSE NULL END) as avg_hours
-    FROM patrol_work_orders pwo
-    WHERE pwo.handler_name IS NOT NULL
-    GROUP BY pwo.handler_name
+  const handlerRows = prepare(`
+    SELECT DISTINCT handler_name
+    FROM patrol_work_orders
+    WHERE handler_name IS NOT NULL
   `).all();
 
-  const handlerStatsFormatted = handlerStats.map(h => ({
-    handler_name: h.handler_name,
-    completed_count: h.completed_count || 0,
-    avg_processing_hours: h.avg_hours ? Math.round(h.avg_hours * 100) / 100 : 0
-  }));
+  const handlerStatsFormatted = handlerRows.map(row => {
+    const handler = row.handler_name;
+    const handlerClosed = prepare(`
+      SELECT id, assigned_at, closed_at
+      FROM patrol_work_orders
+      WHERE handler_name = ? AND status = 'closed'
+        AND assigned_at IS NOT NULL AND closed_at IS NOT NULL
+    `).all(handler);
+
+    let procHours = 0;
+    for (const hwo of handlerClosed) {
+      procHours += calculateProcessingDurationHours(hwo.id);
+    }
+    return {
+      handler_name: handler,
+      completed_count: handlerClosed.length,
+      avg_processing_hours: handlerClosed.length > 0
+        ? Math.round((procHours / handlerClosed.length) * 100) / 100
+        : 0
+    };
+  });
 
   const weekCreated = prepare(`
     SELECT COUNT(*) as cnt FROM patrol_work_orders WHERE created_at >= ?
@@ -982,6 +1019,7 @@ function getWorkOrderDashboard() {
   return {
     status_counts: statusMap,
     avg_processing_hours: avgProcessingHours,
+    avg_turnaround_hours: avgTurnaroundHours,
     total_work_orders: total,
     overdue_count: overdueCount,
     overdue_rate: overdueRate,
