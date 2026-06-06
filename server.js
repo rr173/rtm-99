@@ -20,8 +20,10 @@ const linkMonitorRoutes = require('./routes/linkMonitor');
 const dispatchRoutes = require('./routes/dispatch');
 const maintenanceRoutes = require('./routes/maintenance');
 const auditRoutes = require('./routes/audit');
+const billingRoutes = require('./routes/billing');
 const waterBalanceService = require('./services/waterBalanceService');
 const dispatchService = require('./services/dispatchService');
+const billingService = require('./services/billingService');
 const { initDemoEmergencyPlans, initLinkMonitorDemoData } = require('./models/initData');
 const { auditMiddleware } = require('./middleware/auditMiddleware');
 
@@ -64,6 +66,7 @@ app.use('/api/link-monitor', linkMonitorRoutes);
 app.use('/api/dispatch', dispatchRoutes);
 app.use('/api/maintenance', maintenanceRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/billing', billingRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -113,6 +116,12 @@ async function startServer() {
     
     console.log('正在初始化灌区配水调度数据...');
     dispatchService.initDemoIrrigations();
+    
+    console.log('正在初始化水费计费模块数据...');
+    billingService.initBillingDemoData();
+    
+    console.log('正在启动每小时用水量自动汇总...');
+    billingService.startHourlyAggregation();
     
     app.listen(PORT, () => {
       console.log('========================================');
@@ -207,6 +216,20 @@ async function startServer() {
       console.log('  GET  /api/audit/summary - 操作统计汇总');
       console.log('  GET  /api/audit/trail/:targetId - 操作目标完整轨迹');
       console.log('  GET  /api/audit/report - 结构化审计报告');
+      console.log('');
+      console.log('水费计费与账单结算接口:');
+      console.log('  POST /api/billing/tariffs - 创建水价方案(阶梯水价)');
+      console.log('  GET  /api/billing/tariffs - 所有水价方案列表');
+      console.log('  GET  /api/billing/tariffs/current - 当前生效水价方案');
+      console.log('  GET  /api/billing/usage/aggregate - 手动触发用水量汇总');
+      console.log('  GET  /api/billing/usage/:irrigationId?month= - 某灌区月度用水量明细');
+      console.log('  GET  /api/billing/usage/summary?month= - 所有灌区月度用水量排行');
+      console.log('  POST /api/billing/generate?month= - 生成指定月份所有灌区账单');
+      console.log('  GET  /api/billing/bills?month=&status=&irrigationId= - 查询账单列表');
+      console.log('  GET  /api/billing/bills/:id - 账单详情(含阶梯计费明细)');
+      console.log('  PUT  /api/billing/bills/:id/pay - 标记账单为已付款');
+      console.log('  GET  /api/billing/overdue - 所有逾期未付账单');
+      console.log('  GET  /api/billing/restricted - 当前被限供的灌区列表');
       console.log('');
     });
   } catch (err) {

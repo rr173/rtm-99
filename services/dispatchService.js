@@ -3,6 +3,7 @@ const hydraulicEngine = require('./hydraulicEngine');
 const stateManager = require('./stateManager');
 const predictionService = require('./predictionService');
 const siltationService = require('./siltationService');
+const billingService = require('./billingService');
 
 const g = 9.81;
 const SAFETY_COEFFICIENT = 1.2;
@@ -285,6 +286,24 @@ function optimizeDispatch(inflowRate) {
   const irrigationsRaw = prepare('SELECT * FROM dispatch_irrigations').all();
   const irrigations = irrigationsRaw.map(i => resetDailyQuotaIfNeeded(i));
 
+  const restrictedIds = billingService.getRestrictedIdsSet();
+  const restrictedApplied = [];
+  for (const irrig of irrigations) {
+    if (restrictedIds.has(irrig.id)) {
+      irrig.original_max_flow = irrig.max_flow;
+      irrig.max_flow = irrig.max_flow * 0.5;
+      irrig.is_restricted = true;
+      restrictedApplied.push({
+        irrigation_id: irrig.id,
+        irrigation_name: irrig.name,
+        original_max_flow: irrig.original_max_flow,
+        restricted_max_flow: irrig.max_flow
+      });
+    } else {
+      irrig.is_restricted = false;
+    }
+  }
+
   const gates = prepare('SELECT * FROM gates').all();
   const gateMap = {};
   for (const g of gates) gateMap[g.id] = g;
@@ -328,7 +347,9 @@ function optimizeDispatch(inflowRate) {
         status: 'quota_exhausted',
         remaining_quota: 0,
         min_flow: irrig.min_flow,
-        max_flow: irrig.max_flow
+        max_flow: irrig.max_flow,
+        is_restricted: irrig.is_restricted || false,
+        original_max_flow: irrig.original_max_flow || null
       });
       continue;
     }
@@ -366,7 +387,9 @@ function optimizeDispatch(inflowRate) {
         status: 'under_provisioned',
         remaining_quota: remaining,
         min_flow: irrig.min_flow,
-        max_flow: irrig.max_flow
+        max_flow: irrig.max_flow,
+        is_restricted: irrig.is_restricted || false,
+        original_max_flow: irrig.original_max_flow || null
       });
       continue;
     }
@@ -391,7 +414,9 @@ function optimizeDispatch(inflowRate) {
         status: 'under_provisioned',
         remaining_quota: remaining,
         min_flow: irrig.min_flow,
-        max_flow: irrig.max_flow
+        max_flow: irrig.max_flow,
+        is_restricted: irrig.is_restricted || false,
+        original_max_flow: irrig.original_max_flow || null
       });
       continue;
     }
@@ -411,7 +436,9 @@ function optimizeDispatch(inflowRate) {
       status: 'allocated',
       remaining_quota: Math.round(remaining * 10000) / 10000,
       min_flow: irrig.min_flow,
-      max_flow: irrig.max_flow
+      max_flow: irrig.max_flow,
+      is_restricted: irrig.is_restricted || false,
+      original_max_flow: irrig.original_max_flow || null
     });
   }
 
@@ -471,7 +498,7 @@ function optimizeDispatch(inflowRate) {
     is_applied: 0,
     allocations_json: JSON.stringify(allocations),
     under_provisioned_json: JSON.stringify(underProvisioned),
-    warnings_json: null
+    warnings_json: JSON.stringify({ restricted_irrigations: restrictedApplied })
   };
 
   return {
@@ -480,6 +507,7 @@ function optimizeDispatch(inflowRate) {
     water_balance: waterBalance,
     gate_plan: gate_plan,
     is_water_restriction_mode: isWaterRestrictionMode,
+    restricted_irrigations: restrictedApplied,
     _record: record
   };
 }

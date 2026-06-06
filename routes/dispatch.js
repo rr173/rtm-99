@@ -243,6 +243,7 @@ router.post('/optimize', (req, res) => {
       water_balance: result.water_balance,
       gate_plan: result.gate_plan,
       is_water_restriction_mode: result.is_water_restriction_mode,
+      restricted_irrigations: result.restricted_irrigations || [],
       safety_preview: {
         safe: safetyCheck.safe,
         violations: safetyCheck.violations,

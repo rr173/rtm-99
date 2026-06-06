@@ -613,6 +613,69 @@ async function initDatabase() {
     BEGIN
       SELECT RAISE(ABORT, 'audit_logs 不可删除');
     END;
+
+    CREATE TABLE IF NOT EXISTS billing_tariffs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      effective_date TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_billing_tariffs_active ON billing_tariffs(is_active);
+    CREATE INDEX IF NOT EXISTS idx_billing_tariffs_date ON billing_tariffs(effective_date);
+
+    CREATE TABLE IF NOT EXISTS billing_tariff_tiers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tariff_id INTEGER NOT NULL,
+      tier_index INTEGER NOT NULL,
+      start_volume REAL NOT NULL DEFAULT 0,
+      end_volume REAL,
+      unit_price REAL NOT NULL,
+      FOREIGN KEY (tariff_id) REFERENCES billing_tariffs(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_billing_tariff_tiers_tariff ON billing_tariff_tiers(tariff_id);
+
+    CREATE TABLE IF NOT EXISTS billing_usage_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      irrigation_id INTEGER NOT NULL,
+      irrigation_name TEXT,
+      record_date TEXT NOT NULL,
+      record_hour INTEGER NOT NULL DEFAULT 0,
+      volume REAL NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'auto',
+      timestamp INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_billing_usage_irrigation ON billing_usage_records(irrigation_id);
+    CREATE INDEX IF NOT EXISTS idx_billing_usage_date ON billing_usage_records(record_date);
+    CREATE INDEX IF NOT EXISTS idx_billing_usage_irr_date ON billing_usage_records(irrigation_id, record_date);
+
+    CREATE TABLE IF NOT EXISTS billing_bills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      irrigation_id INTEGER NOT NULL,
+      irrigation_name TEXT,
+      billing_month TEXT NOT NULL,
+      total_volume REAL NOT NULL DEFAULT 0,
+      quota_volume REAL NOT NULL DEFAULT 0,
+      excess_volume REAL NOT NULL DEFAULT 0,
+      quota_amount REAL NOT NULL DEFAULT 0,
+      excess_amount REAL NOT NULL DEFAULT 0,
+      total_amount REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'paid', 'overdue')),
+      tariff_snapshot TEXT,
+      tier_details TEXT,
+      generated_at INTEGER NOT NULL,
+      paid_at INTEGER,
+      due_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_billing_bills_irrigation ON billing_bills(irrigation_id);
+    CREATE INDEX IF NOT EXISTS idx_billing_bills_month ON billing_bills(billing_month);
+    CREATE INDEX IF NOT EXISTS idx_billing_bills_status ON billing_bills(status);
+    CREATE INDEX IF NOT EXISTS idx_billing_bills_irr_month ON billing_bills(irrigation_id, billing_month);
   `);
   
   saveDatabase();
