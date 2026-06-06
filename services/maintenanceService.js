@@ -421,16 +421,27 @@ function startMaintenancePlan(id) {
   
   for (const gate of upstreamGates) {
     const previousOpening = gate.current_opening;
+    const wasLocked = stateManager.isGateLocked(gate.id);
     stateManager.lockGate(gate.id, 'maintenance', plan.id);
-    stateManager.updateGateOpening(gate.id, 0);
     
-    gateChanges.push({
-      gate_id: gate.id,
-      gate_name: gate.name,
-      previous_opening: previousOpening,
-      current_opening: 0,
-      action: 'closed_and_locked'
-    });
+    if (!wasLocked) {
+      stateManager.updateGateOpening(gate.id, 0);
+      gateChanges.push({
+        gate_id: gate.id,
+        gate_name: gate.name,
+        previous_opening: previousOpening,
+        current_opening: 0,
+        action: 'closed_and_locked'
+      });
+    } else {
+      gateChanges.push({
+        gate_id: gate.id,
+        gate_name: gate.name,
+        previous_opening: previousOpening,
+        current_opening: previousOpening,
+        action: 'already_locked_by_other_plan'
+      });
+    }
   }
   
   const now = Date.now();
@@ -443,13 +454,19 @@ function startMaintenancePlan(id) {
   saveDatabase();
   
   const updatedPlan = getMaintenancePlan(id);
+  const closedCount = gateChanges.filter(g => g.action === 'closed_and_locked').length;
+  const alreadyLockedCount = gateChanges.filter(g => g.action === 'already_locked_by_other_plan').length;
+  let message = `维护已开始，已关闭并锁定 ${closedCount} 个上游闸门`;
+  if (alreadyLockedCount > 0) {
+    message += `（另有 ${alreadyLockedCount} 个闸门已被其他维护计划锁定）`;
+  }
   
   return {
     success: true,
     plan: updatedPlan,
     gate_changes: gateChanges,
     started_at: now,
-    message: `维护已开始，已关闭并锁定 ${gateChanges.length} 个上游闸门`
+    message: message
   };
 }
 
@@ -468,21 +485,46 @@ function completeMaintenancePlan(id) {
     gateSnapshot = plan.gate_snapshot_json ? JSON.parse(plan.gate_snapshot_json) : [];
   } catch (e) {}
   
+  const otherActivePlans = prepare(`
+    SELECT id, segment_id FROM maintenance_plans
+    WHERE status = 'active' AND id != ?
+  `).all(parseInt(id));
+  
+  const otherPlanGateIds = new Set();
+  for (const op of otherActivePlans) {
+    const opGates = getUpstreamGates(op.segment_id);
+    for (const g of opGates) {
+      otherPlanGateIds.add(g.id);
+    }
+  }
+  
   const gateChanges = [];
   
   for (const snap of gateSnapshot) {
-    const previousOpening = snap.previous_opening;
+    const stillNeeded = otherPlanGateIds.has(snap.gate_id);
     
-    stateManager.updateGateOpening(snap.gate_id, previousOpening);
-    stateManager.unlockGate(snap.gate_id);
-    
-    gateChanges.push({
-      gate_id: snap.gate_id,
-      gate_name: snap.gate_name,
-      previous_opening: 0,
-      current_opening: previousOpening,
-      action: 'restored_and_unlocked'
-    });
+    if (!stillNeeded) {
+      stateManager.updateGateOpening(snap.gate_id, snap.previous_opening);
+      stateManager.unlockGate(snap.gate_id, plan.id);
+      gateChanges.push({
+        gate_id: snap.gate_id,
+        gate_name: snap.gate_name,
+        previous_opening: 0,
+        current_opening: snap.previous_opening,
+        action: 'restored_and_unlocked'
+      });
+    } else {
+      stateManager.unlockGate(snap.gate_id, plan.id);
+      const lockInfo = stateManager.getGateLockInfo(snap.gate_id);
+      gateChanges.push({
+        gate_id: snap.gate_id,
+        gate_name: snap.gate_name,
+        previous_opening: 0,
+        current_opening: 0,
+        action: 'kept_locked_by_other_plan',
+        remaining_lock_count: lockInfo.maintenance_plan_ids ? lockInfo.maintenance_plan_ids.length : 0
+      });
+    }
   }
   
   const now = Date.now();
@@ -495,13 +537,19 @@ function completeMaintenancePlan(id) {
   saveDatabase();
   
   const updatedPlan = getMaintenancePlan(id);
+  const restoredCount = gateChanges.filter(g => g.action === 'restored_and_unlocked').length;
+  const keptLockedCount = gateChanges.filter(g => g.action === 'kept_locked_by_other_plan').length;
+  let message = `维护已完成，已恢复并解锁 ${restoredCount} 个闸门`;
+  if (keptLockedCount > 0) {
+    message += `（${keptLockedCount} 个闸门因其他维护计划仍保持锁定）`;
+  }
   
   return {
     success: true,
     plan: updatedPlan,
     gate_changes: gateChanges,
     completed_at: now,
-    message: `维护已完成，已恢复并解锁 ${gateChanges.length} 个闸门`
+    message: message
   };
 }
 

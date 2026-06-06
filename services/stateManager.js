@@ -30,7 +30,7 @@ function initState() {
     currentState.gateLocks[gate.id] = {
       locked: false,
       reason: null,
-      maintenance_plan_id: null,
+      maintenance_plan_ids: [],
       locked_at: null
     };
   }
@@ -40,21 +40,36 @@ function initState() {
   `).all();
   
   for (const plan of activePlans) {
-    const upstreamGates = prepare(`
+    const gatesOnSegment = prepare(`
       SELECT g.id FROM gates g
-      WHERE g.canal_segment_id = ? AND g.position_on_segment <= 0.01
-      UNION
-      SELECT g.id FROM gates g
-      WHERE g.canal_segment_id = ? AND g.type = 'regulator'
-    `).all(plan.segment_id, plan.segment_id);
+      WHERE g.canal_segment_id = ? AND (g.position_on_segment <= 0.01 OR g.type = 'regulator')
+    `).all(plan.segment_id);
     
-    for (const gate of upstreamGates) {
-      currentState.gateLocks[gate.id] = {
-        locked: true,
-        reason: 'maintenance',
-        maintenance_plan_id: plan.id,
-        locked_at: Date.now()
-      };
+    const controllingGate = prepare(`
+      SELECT g.id FROM nodes n
+      JOIN gates g ON n.gate_id = g.id
+      WHERE n.downstream_segment_id = ?
+    `).all(plan.segment_id);
+    
+    const allGateIds = new Set();
+    for (const g of gatesOnSegment) allGateIds.add(g.id);
+    for (const g of controllingGate) allGateIds.add(g.id);
+    
+    for (const gateId of allGateIds) {
+      if (!currentState.gateLocks[gateId]) {
+        currentState.gateLocks[gateId] = {
+          locked: false,
+          reason: null,
+          maintenance_plan_ids: [],
+          locked_at: null
+        };
+      }
+      currentState.gateLocks[gateId].locked = true;
+      currentState.gateLocks[gateId].reason = 'maintenance';
+      if (!currentState.gateLocks[gateId].maintenance_plan_ids.includes(plan.id)) {
+        currentState.gateLocks[gateId].maintenance_plan_ids.push(plan.id);
+      }
+      currentState.gateLocks[gateId].locked_at = currentState.gateLocks[gateId].locked_at || Date.now();
     }
   }
 
@@ -181,7 +196,12 @@ function isGateLocked(gateId) {
 }
 
 function getGateLockInfo(gateId) {
-  return currentState.gateLocks[gateId] || { locked: false, reason: null, maintenance_plan_id: null, locked_at: null };
+  return currentState.gateLocks[gateId] || { 
+    locked: false, 
+    reason: null, 
+    maintenance_plan_ids: [], 
+    locked_at: null 
+  };
 }
 
 function lockGate(gateId, reason, maintenancePlanId) {
@@ -189,35 +209,44 @@ function lockGate(gateId, reason, maintenancePlanId) {
     currentState.gateLocks[gateId] = {
       locked: false,
       reason: null,
-      maintenance_plan_id: null,
+      maintenance_plan_ids: [],
       locked_at: null
     };
   }
-  currentState.gateLocks[gateId] = {
-    locked: true,
-    reason: reason || 'maintenance',
-    maintenance_plan_id: maintenancePlanId || null,
-    locked_at: Date.now()
-  };
-  return currentState.gateLocks[gateId];
+  const lock = currentState.gateLocks[gateId];
+  if (maintenancePlanId != null && !lock.maintenance_plan_ids.includes(maintenancePlanId)) {
+    lock.maintenance_plan_ids.push(maintenancePlanId);
+  }
+  lock.locked = true;
+  lock.reason = reason || 'maintenance';
+  lock.locked_at = lock.locked_at || Date.now();
+  return lock;
 }
 
-function unlockGate(gateId) {
+function unlockGate(gateId, maintenancePlanId) {
   if (!currentState.gateLocks[gateId]) {
     currentState.gateLocks[gateId] = {
       locked: false,
       reason: null,
-      maintenance_plan_id: null,
+      maintenance_plan_ids: [],
       locked_at: null
     };
+    return currentState.gateLocks[gateId];
   }
-  currentState.gateLocks[gateId] = {
-    locked: false,
-    reason: null,
-    maintenance_plan_id: null,
-    locked_at: null
-  };
-  return currentState.gateLocks[gateId];
+  const lock = currentState.gateLocks[gateId];
+  
+  if (maintenancePlanId != null) {
+    lock.maintenance_plan_ids = lock.maintenance_plan_ids.filter(id => id !== maintenancePlanId);
+  } else {
+    lock.maintenance_plan_ids = [];
+  }
+  
+  if (lock.maintenance_plan_ids.length === 0) {
+    lock.locked = false;
+    lock.reason = null;
+    lock.locked_at = null;
+  }
+  return lock;
 }
 
 function getAllGateLocks() {
