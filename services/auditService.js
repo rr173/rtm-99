@@ -10,7 +10,8 @@ const VALID_OPERATION_TYPES = [
   'emergency_execute',
   'emergency_simulate',
   'telemetry_batch',
-  'operation_denied'
+  'operation_denied',
+  'ice_dispatch_apply'
 ];
 
 const WORK_START_HOUR = 8;

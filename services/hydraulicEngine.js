@@ -76,6 +76,16 @@ function calculateGateDischarge(gate, upstreamDepth, downstreamDepth) {
   return Math.max(0, Q);
 }
 
+function getEffectiveSiltationAndIce(seg) {
+  const sd = seg.siltation_depth || 0;
+  const it = seg._iceThickness || seg.ice_thickness || 0;
+  return {
+    totalReduction: sd + it,
+    siltationDepth: sd,
+    iceThickness: it
+  };
+}
+
 function computeSteadyState(segments, gates, headwaterDepth, adjustedGates = {}) {
   const orderedSegments = [...segments].sort((a, b) => a.order_index - b.order_index);
   const result = {};
@@ -84,7 +94,8 @@ function computeSteadyState(segments, gates, headwaterDepth, adjustedGates = {})
 
   for (let segIdx = 0; segIdx < orderedSegments.length; segIdx++) {
     const seg = orderedSegments[segIdx];
-    const sd = seg.siltation_depth || 0;
+    const eff = getEffectiveSiltationAndIce(seg);
+    const sd = eff.totalReduction;
     const segGates = gates.filter(g => g.canal_segment_id === seg.id);
     const upstreamGate = segGates.find(g => g.position_on_segment <= 0.01);
     const divGates = gates.filter(g => g.type === 'diversion' && g.canal_segment_id === seg.id && g.position_on_segment > 0);
@@ -97,7 +108,8 @@ function computeSteadyState(segments, gates, headwaterDepth, adjustedGates = {})
         throughFlow: 0,
         normalDepth: sd,
         effectiveDepth: 0,
-        siltationDepth: sd,
+        siltationDepth: eff.siltationDepth,
+        iceThickness: eff.iceThickness,
         upstreamLevel: upstreamAbsLevel,
         downstreamLevel: blockedLevel,
         canalUpstream: sd,
@@ -168,7 +180,8 @@ function computeSteadyState(segments, gates, headwaterDepth, adjustedGates = {})
       throughFlow: Qthrough,
       normalDepth: hNormalActual,
       effectiveDepth: hNormalEff,
-      siltationDepth: sd,
+      siltationDepth: eff.siltationDepth,
+      iceThickness: eff.iceThickness,
       upstreamLevel: upLevel,
       downstreamLevel: downLevel,
       canalUpstream: hNormalActual,
@@ -214,7 +227,8 @@ function createComputationalGrid(segments, gates) {
 function initializeWaterLevels(grid, initialConditions, segments, headwaterDepth) {
   for (const node of grid) {
     const seg = node.segment;
-    const sd = seg.siltation_depth || 0;
+    const eff = getEffectiveSiltationAndIce(seg);
+    const sd = eff.totalReduction;
     const ic = initialConditions ? initialConditions[seg.id] : null;
 
     if (ic) {
@@ -250,7 +264,8 @@ function simulateStep(segmentGridMap, segments, gates, headwaterDepth, downstrea
 
   for (let segIdx = 0; segIdx < orderedSegments.length; segIdx++) {
     const seg = orderedSegments[segIdx];
-    const sd = seg.siltation_depth || 0;
+    const eff = getEffectiveSiltationAndIce(seg);
+    const sd = eff.totalReduction;
     const segGrid = segmentGridMap[seg.id];
     const segGates = gates.filter(g => g.canal_segment_id === seg.id);
     const divGates = findDiversionGatesOnSegment(seg.id, gates);
@@ -449,5 +464,6 @@ module.exports = {
   initializeWaterLevels,
   simulateStep,
   runSimulation,
-  interpolateWaterLevelAtPoint
+  interpolateWaterLevelAtPoint,
+  getEffectiveSiltationAndIce
 };

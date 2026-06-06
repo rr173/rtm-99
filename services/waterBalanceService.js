@@ -1,6 +1,7 @@
 const { prepare, saveDatabase } = require('../db');
 const hydraulicEngine = require('./hydraulicEngine');
 const siltationService = require('./siltationService');
+const iceService = require('./iceService');
 
 function trapezoidalIntegral(timeSeries) {
   if (!timeSeries || timeSeries.length < 2) {
@@ -22,7 +23,9 @@ function trapezoidalIntegral(timeSeries) {
 
 function calculateEffectiveCrossSection(seg, avgWaterDepth) {
   const siltationDepth = seg.siltation_depth || 0;
-  const effectiveDepth = Math.max(0, avgWaterDepth - siltationDepth);
+  const iceAdj = iceService.getSegmentIceAdjustment(seg.id);
+  const iceThickness = iceAdj.iceThickness || 0;
+  const effectiveDepth = Math.max(0, avgWaterDepth - siltationDepth - iceThickness);
   
   if (effectiveDepth <= 0) {
     return 0;
@@ -79,10 +82,15 @@ function getSegmentUpstreamDownstreamPoints(seg) {
 
 function computeFlowFromWaterLevels(seg, upstreamLevel, downstreamLevel, gates) {
   const sd = seg.siltation_depth || 0;
+  const iceAdj = iceService.getSegmentIceAdjustment(seg.id);
+  const iceThickness = iceAdj.iceThickness || 0;
+  const manningN = seg.manning_n * iceAdj.manningMultiplier;
+  const totalReduction = sd + iceThickness;
+
   const upDepth = Math.max(0, upstreamLevel - seg.bottom_elevation);
   const downDepth = Math.max(0, downstreamLevel - seg.bottom_elevation);
-  const effUpDepth = Math.max(0, upDepth - sd);
-  const effDownDepth = Math.max(0, downDepth - sd);
+  const effUpDepth = Math.max(0, upDepth - totalReduction);
+  const effDownDepth = Math.max(0, downDepth - totalReduction);
   
   if (effUpDepth <= 0 || effDownDepth <= 0) {
     return { throughFlow: 0, diversionFlow: 0, totalFlow: 0 };
@@ -91,7 +99,7 @@ function computeFlowFromWaterLevels(seg, upstreamLevel, downstreamLevel, gates) 
   const avgEffDepth = (effUpDepth + effDownDepth) / 2;
   const A = hydraulicEngine.trapezoidalArea(seg.bottom_width, seg.side_slope, avgEffDepth);
   const R = hydraulicEngine.trapezoidalHydraulicRadius(seg.bottom_width, seg.side_slope, avgEffDepth);
-  const Q = hydraulicEngine.manningDischarge(seg.manning_n, A, R, seg.bed_slope);
+  const Q = hydraulicEngine.manningDischarge(manningN, A, R, seg.bed_slope);
   
   const segGates = gates.filter(g => g.canal_segment_id === seg.id && g.type === 'diversion');
   let divFlow = 0;
@@ -344,17 +352,19 @@ function calculateWaterBalance(windowMinutes = 30) {
 }
 
 function getSteadyStateFlows() {
-  const segments = prepare('SELECT * FROM canal_segments ORDER BY order_index').all();
+  let segments = prepare('SELECT * FROM canal_segments ORDER BY order_index').all();
   const gates = prepare('SELECT * FROM gates').all();
   const points = prepare('SELECT * FROM measurement_points').all();
   const underConstructionIds = siltationService.getUnderConstructionSegmentIds();
   
-  const segmentsForHydraulics = segments.map(seg => {
+  segments = segments.map(seg => {
     if (underConstructionIds.includes(seg.id)) {
       return { ...seg, siltation_depth: seg.design_water_level };
     }
     return seg;
   });
+
+  segments = iceService.applyIceAdjustmentsToSegments(segments);
 
   const firstGate = gates.find(g => g.position_on_segment <= 0.01 && g.canal_segment_id === segments[0]?.id);
   let headwaterDepth = 2.5;
@@ -371,7 +381,7 @@ function getSteadyStateFlows() {
     }
   }
 
-  return hydraulicEngine.computeSteadyState(segmentsForHydraulics, gates, headwaterDepth);
+  return hydraulicEngine.computeSteadyState(segments, gates, headwaterDepth);
 }
 
 function calculateLeakageConfidence(records) {

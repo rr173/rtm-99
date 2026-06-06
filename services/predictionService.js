@@ -2,6 +2,7 @@ const { prepare } = require('../db');
 const hydraulicEngine = require('./hydraulicEngine');
 const stateManager = require('./stateManager');
 const siltationService = require('./siltationService');
+const iceService = require('./iceService');
 
 const PREDICT_STEPS = 600;
 
@@ -14,28 +15,38 @@ function predictWaterLevels(adjustments) {
 
   const underConstructionIds = siltationService.getUnderConstructionSegmentIds();
 
-  const segments = segmentsRaw.map(seg => {
+  let segments = segmentsRaw.map(seg => {
     if (underConstructionIds.includes(seg.id)) {
       return { ...seg, siltation_depth: seg.design_water_level, _underConstruction: true };
     }
     return seg;
   });
 
+  segments = iceService.applyIceAdjustmentsToSegments(segments);
+
+  const iceAdjustments = iceService.getHydraulicAdjustments();
+
   const siltationInfo = {};
   for (const seg of segmentsRaw) {
     const isUnderConstruction = underConstructionIds.includes(seg.id);
+    const iceAdj = iceAdjustments.adjustments.find(a => a.segmentId === seg.id);
     if (isUnderConstruction) {
       siltationInfo[seg.id] = {
         siltationDepth: seg.siltation_depth || 0,
         effectiveDepth: 0,
-        underConstruction: true
+        underConstruction: true,
+        iceThickness: iceAdj ? iceAdj.iceThickness : 0,
+        manningMultiplier: iceAdj ? iceAdj.manningMultiplier : 1.0
       };
     } else {
       const sd = seg.siltation_depth || 0;
+      const iceThickness = iceAdj ? iceAdj.iceThickness : 0;
       siltationInfo[seg.id] = {
         siltationDepth: sd,
-        effectiveDepth: Math.max(0, seg.design_water_level - sd),
-        underConstruction: false
+        iceThickness: iceThickness,
+        effectiveDepth: Math.max(0, seg.design_water_level - sd - iceThickness),
+        underConstruction: false,
+        manningMultiplier: iceAdj ? iceAdj.manningMultiplier : 1.0
       };
     }
   }
@@ -230,6 +241,16 @@ function predictWaterLevels(adjustments) {
       normalDepth: Math.round(v.normalDepth * 1000) / 1000,
       effectiveDepth: v.effectiveDepth !== undefined ? Math.round(v.effectiveDepth * 1000) / 1000 : undefined,
       siltationDepth: v.siltationDepth !== undefined ? Math.round(v.siltationDepth * 1000) / 1000 : undefined,
+      iceThickness: v.iceThickness !== undefined ? Math.round(v.iceThickness * 1000) / 1000 : undefined,
+      upstreamLevel: Math.round(v.upstreamLevel * 1000) / 1000,
+      downstreamLevel: Math.round(v.downstreamLevel * 1000) / 1000
+    }])),
+    steadyStateAdjusted: Object.fromEntries(Object.entries(steadyStateAdjusted).map(([k, v]) => [k, {
+      flow: Math.round(v.flow * 1000) / 1000,
+      normalDepth: Math.round(v.normalDepth * 1000) / 1000,
+      effectiveDepth: v.effectiveDepth !== undefined ? Math.round(v.effectiveDepth * 1000) / 1000 : undefined,
+      siltationDepth: v.siltationDepth !== undefined ? Math.round(v.siltationDepth * 1000) / 1000 : undefined,
+      iceThickness: v.iceThickness !== undefined ? Math.round(v.iceThickness * 1000) / 1000 : undefined,
       upstreamLevel: Math.round(v.upstreamLevel * 1000) / 1000,
       downstreamLevel: Math.round(v.downstreamLevel * 1000) / 1000
     }])),

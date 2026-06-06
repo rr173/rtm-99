@@ -147,6 +147,16 @@ function determineAuditConfig(req) {
     };
   }
 
+  if (method === 'POST' && path === '/api/ice/apply-recommendations') {
+    return {
+      enabled: true,
+      operationType: 'ice_dispatch_apply',
+      targetId: null,
+      captureBefore: () => captureDispatchState(),
+      captureAfter: () => captureDispatchState()
+    };
+  }
+
   return { enabled: false };
 }
 

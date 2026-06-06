@@ -4,19 +4,22 @@ const { prepare } = require('../db');
 const stateManager = require('../services/stateManager');
 const hydraulicEngine = require('../services/hydraulicEngine');
 const siltationService = require('../services/siltationService');
+const iceService = require('../services/iceService');
 
 function getSteadyStateDischarge(gate) {
-  const segments = prepare('SELECT * FROM canal_segments ORDER BY order_index').all();
+  let segments = prepare('SELECT * FROM canal_segments ORDER BY order_index').all();
   const gates = prepare('SELECT * FROM gates').all();
   const points = prepare('SELECT * FROM measurement_points').all();
 
   const underConstructionIds = siltationService.getUnderConstructionSegmentIds();
-  const segmentsForHydraulics = segments.map(seg => {
+  segments = segments.map(seg => {
     if (underConstructionIds.includes(seg.id)) {
       return { ...seg, siltation_depth: seg.design_water_level };
     }
     return seg;
   });
+
+  segments = iceService.applyIceAdjustmentsToSegments(segments);
 
   const firstGate = gates.find(g => g.position_on_segment <= 0.01 && g.canal_segment_id === segments[0].id);
   let headwaterDepth = 2.5;
@@ -30,7 +33,7 @@ function getSteadyStateDischarge(gate) {
     }
   }
 
-  const steadyState = hydraulicEngine.computeSteadyState(segmentsForHydraulics, gates, headwaterDepth);
+  const steadyState = hydraulicEngine.computeSteadyState(segments, gates, headwaterDepth);
   const seg = segments.find(s => s.id === gate.canal_segment_id);
   const ss = seg ? steadyState[seg.id] : null;
 

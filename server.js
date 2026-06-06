@@ -21,9 +21,11 @@ const dispatchRoutes = require('./routes/dispatch');
 const maintenanceRoutes = require('./routes/maintenance');
 const auditRoutes = require('./routes/audit');
 const billingRoutes = require('./routes/billing');
+const iceRoutes = require('./routes/ice');
 const waterBalanceService = require('./services/waterBalanceService');
 const dispatchService = require('./services/dispatchService');
 const billingService = require('./services/billingService');
+const iceService = require('./services/iceService');
 const { initDemoEmergencyPlans, initLinkMonitorDemoData } = require('./models/initData');
 const { auditMiddleware } = require('./middleware/auditMiddleware');
 
@@ -67,6 +69,7 @@ app.use('/api/dispatch', dispatchRoutes);
 app.use('/api/maintenance', maintenanceRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/billing', billingRoutes);
+app.use('/api/ice', iceRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -119,6 +122,9 @@ async function startServer() {
     
     console.log('正在初始化水费计费模块数据...');
     billingService.initBillingDemoData();
+    
+    console.log('正在初始化冰期运行与防冻调度演示数据...');
+    iceService.initIceDemoData();
     
     console.log('正在启动每小时用水量自动汇总...');
     billingService.startHourlyAggregation();
@@ -230,6 +236,14 @@ async function startServer() {
       console.log('  PUT  /api/billing/bills/:id/pay - 标记账单为已付款');
       console.log('  GET  /api/billing/overdue - 所有逾期未付账单');
       console.log('  GET  /api/billing/restricted - 当前被限供的灌区列表');
+      console.log('');
+      console.log('渠道冰期运行与防冻调度接口:');
+      console.log('  POST /api/ice/temperature - 上报气温和水温数据');
+      console.log('  GET  /api/ice/status - 所有渠段冰期状态');
+      console.log('  GET  /api/ice/status/:segmentId - 单渠段冰期详情(冰厚估算、有效过水比)');
+      console.log('  GET  /api/ice/hydraulic-adjustment - 各渠段冰期修正系数');
+      console.log('  GET  /api/ice/recommendations - 防冻调度建议');
+      console.log('  POST /api/ice/apply-recommendations - 执行防冻调度建议');
       console.log('');
     });
   } catch (err) {

@@ -583,7 +583,7 @@ async function initDatabase() {
         'gate_adjust', 'gate_target_set', 'siltation_set',
         'maintenance_start', 'maintenance_complete',
         'dispatch_apply', 'emergency_execute', 'emergency_simulate',
-        'telemetry_batch', 'operation_denied'
+        'telemetry_batch', 'operation_denied', 'ice_dispatch_apply'
       )),
       operator TEXT NOT NULL DEFAULT 'system',
       target_id TEXT,
@@ -676,6 +676,42 @@ async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_billing_bills_month ON billing_bills(billing_month);
     CREATE INDEX IF NOT EXISTS idx_billing_bills_status ON billing_bills(status);
     CREATE INDEX IF NOT EXISTS idx_billing_bills_irr_month ON billing_bills(irrigation_id, billing_month);
+
+    CREATE TABLE IF NOT EXISTS ice_temperature_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      point_id TEXT NOT NULL,
+      air_temperature REAL NOT NULL,
+      water_temperature REAL NOT NULL,
+      timestamp INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ice_temp_records_point ON ice_temperature_records(point_id);
+    CREATE INDEX IF NOT EXISTS idx_ice_temp_records_time ON ice_temperature_records(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_ice_temp_records_point_time ON ice_temperature_records(point_id, timestamp);
+
+    CREATE TABLE IF NOT EXISTS ice_segment_status (
+      segment_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'normal' CHECK(status IN ('normal', 'warning', 'frozen', 'thawing')),
+      ice_thickness REAL NOT NULL DEFAULT 0,
+      cumulative_negative_temp_hours REAL NOT NULL DEFAULT 0,
+      frozen_at INTEGER,
+      last_updated INTEGER NOT NULL,
+      consecutive_icing_count INTEGER NOT NULL DEFAULT 0,
+      consecutive_thaw_count INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ice_seg_status_status ON ice_segment_status(status);
+
+    CREATE TABLE IF NOT EXISTS ice_dispatch_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      operator TEXT NOT NULL DEFAULT 'system',
+      segment_ids TEXT NOT NULL,
+      adjustments_json TEXT NOT NULL,
+      recommendations_json TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ice_dispatch_time ON ice_dispatch_records(timestamp);
   `);
   
   saveDatabase();
