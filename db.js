@@ -580,8 +580,10 @@ async function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp INTEGER NOT NULL,
       operation_type TEXT NOT NULL CHECK(operation_type IN (
-        'gate_adjust', 'siltation_set', 'maintenance_start', 'maintenance_complete',
-        'dispatch_apply', 'emergency_execute', 'telemetry_batch', 'operation_denied'
+        'gate_adjust', 'gate_target_set', 'siltation_set',
+        'maintenance_start', 'maintenance_complete',
+        'dispatch_apply', 'emergency_execute', 'emergency_simulate',
+        'telemetry_batch', 'operation_denied'
       )),
       operator TEXT NOT NULL DEFAULT 'system',
       target_id TEXT,
@@ -599,6 +601,18 @@ async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_audit_logs_operator ON audit_logs(operator);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_id);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_type_time ON audit_logs(operation_type, timestamp);
+
+    CREATE TRIGGER IF NOT EXISTS trg_audit_logs_no_update
+    BEFORE UPDATE ON audit_logs
+    BEGIN
+      SELECT RAISE(ABORT, 'audit_logs 不可修改');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_audit_logs_no_delete
+    BEFORE DELETE ON audit_logs
+    BEGIN
+      SELECT RAISE(ABORT, 'audit_logs 不可删除');
+    END;
   `);
   
   saveDatabase();

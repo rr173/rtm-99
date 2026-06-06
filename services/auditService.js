@@ -2,11 +2,13 @@ const { prepare, exec, saveDatabase } = require('../db');
 
 const VALID_OPERATION_TYPES = [
   'gate_adjust',
+  'gate_target_set',
   'siltation_set',
   'maintenance_start',
   'maintenance_complete',
   'dispatch_apply',
   'emergency_execute',
+  'emergency_simulate',
   'telemetry_batch',
   'operation_denied'
 ];

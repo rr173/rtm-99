@@ -50,7 +50,18 @@ function determineAuditConfig(req) {
   const method = req.method;
   const path = req.path;
 
-  if (method === 'PUT' && /^\/api\/gates\/[^/]+(\/target-opening)?$/.test(path)) {
+  if (method === 'PUT' && /^\/api\/gates\/[^/]+\/target-opening$/.test(path)) {
+    const gateId = path.split('/')[3];
+    return {
+      enabled: true,
+      operationType: 'gate_target_set',
+      targetId: gateId,
+      captureBefore: () => captureGateState(gateId),
+      captureAfter: () => captureGateState(gateId)
+    };
+  }
+
+  if (method === 'PUT' && /^\/api\/gates\/[^/]+$/.test(path)) {
     const gateId = path.split('/')[3];
     return {
       enabled: true,
@@ -104,11 +115,22 @@ function determineAuditConfig(req) {
     };
   }
 
-  if (method === 'POST' && /^\/api\/emergency\/(execute|simulate)\/[^/]+$/.test(path)) {
+  if (method === 'POST' && /^\/api\/emergency\/execute\/[^/]+$/.test(path)) {
     const planId = path.split('/')[4];
     return {
       enabled: true,
       operationType: 'emergency_execute',
+      targetId: planId,
+      captureBefore: () => captureEmergencyExecutionState(planId),
+      captureAfter: () => captureEmergencyExecutionState(planId)
+    };
+  }
+
+  if (method === 'POST' && /^\/api\/emergency\/simulate\/[^/]+$/.test(path)) {
+    const planId = path.split('/')[4];
+    return {
+      enabled: true,
+      operationType: 'emergency_simulate',
       targetId: planId,
       captureBefore: () => captureEmergencyExecutionState(planId),
       captureAfter: () => captureEmergencyExecutionState(planId)
