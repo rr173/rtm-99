@@ -4,6 +4,7 @@ const currentState = {
   waterLevels: {},
   gateStates: {},
   gateLocks: {},
+  waterQualityRestrictions: {},
   lastUpdate: Date.now()
 };
 
@@ -33,6 +34,24 @@ function initState() {
       maintenance_plan_ids: [],
       locked_at: null
     };
+    currentState.waterQualityRestrictions[gate.id] = null;
+  }
+
+  const activeWQRestrictions = prepare(`
+    SELECT * FROM water_quality_lockdowns WHERE status = 'active'
+  `).all();
+  for (const r of activeWQRestrictions) {
+    if (!currentState.waterQualityRestrictions[r.gate_id]) {
+      currentState.waterQualityRestrictions[r.gate_id] = [];
+    }
+    currentState.waterQualityRestrictions[r.gate_id].push({
+      id: r.id,
+      segmentId: r.segment_id,
+      eventId: r.event_id,
+      originalOpening: r.original_opening,
+      restrictedOpening: r.restricted_opening,
+      appliedAt: r.applied_at
+    });
   }
 
   const activePlans = prepare(`
@@ -156,11 +175,28 @@ function getGateState(gateId) {
   return currentState.gateStates[gateId];
 }
 
+function getEffectiveRestrictedOpening(gateId) {
+  const restrictions = [];
+  const wqRests = currentState.waterQualityRestrictions[gateId];
+  if (wqRests && wqRests.length > 0) {
+    for (const r of wqRests) {
+      restrictions.push(r.restrictedOpening);
+    }
+  }
+  if (restrictions.length === 0) return null;
+  return Math.min(...restrictions);
+}
+
 function updateGateOpening(gateId, newOpening) {
   const gate = prepare('SELECT * FROM gates WHERE id = ?').get(gateId);
   if (!gate) return null;
 
-  const clampedOpening = Math.max(0, Math.min(gate.max_opening, newOpening));
+  let clampedOpening = Math.max(0, Math.min(gate.max_opening, newOpening));
+
+  const restrictedOpening = getEffectiveRestrictedOpening(gateId);
+  if (restrictedOpening !== null) {
+    clampedOpening = Math.min(clampedOpening, restrictedOpening);
+  }
   
   prepare(`
     UPDATE gates SET current_opening = ? WHERE id = ?
@@ -173,6 +209,95 @@ function updateGateOpening(gateId, newOpening) {
   };
 
   return clampedOpening;
+}
+
+function applyWaterQualityRestriction(gateId, restrictedOpening, originalOpening) {
+  if (!currentState.waterQualityRestrictions[gateId]) {
+    currentState.waterQualityRestrictions[gateId] = [];
+  }
+
+  const gate = prepare('SELECT * FROM gates WHERE id = ?').get(gateId);
+  if (!gate) return null;
+
+  const existing = currentState.waterQualityRestrictions[gateId];
+  const conflict = existing.find(r => Math.abs(r.restrictedOpening - restrictedOpening) < 0.001);
+  if (conflict) {
+    return gate.current_opening;
+  }
+
+  existing.push({
+    id: Date.now(),
+    segmentId: null,
+    eventId: null,
+    originalOpening,
+    restrictedOpening,
+    appliedAt: Date.now()
+  });
+
+  const effectiveRestricted = getEffectiveRestrictedOpening(gateId);
+  const finalOpening = Math.min(gate.current_opening, effectiveRestricted);
+
+  prepare(`UPDATE gates SET current_opening = ? WHERE id = ?`).run(finalOpening, gateId);
+
+  currentState.gateStates[gateId] = {
+    ...currentState.gateStates[gateId],
+    current_opening: finalOpening,
+    target_opening: finalOpening
+  };
+
+  return finalOpening;
+}
+
+function removeWaterQualityRestriction(gateId, originalOpening) {
+  const restrictions = currentState.waterQualityRestrictions[gateId];
+  if (!restrictions || restrictions.length === 0) {
+    const gate = prepare('SELECT * FROM gates WHERE id = ?').get(gateId);
+    return gate ? gate.current_opening : null;
+  }
+
+  restrictions.pop();
+
+  const gate = prepare('SELECT * FROM gates WHERE id = ?').get(gateId);
+  if (!gate) return null;
+
+  const effectiveRestricted = getEffectiveRestrictedOpening(gateId);
+
+  let finalOpening;
+  if (effectiveRestricted !== null) {
+    finalOpening = Math.min(originalOpening, effectiveRestricted);
+  } else {
+    finalOpening = originalOpening;
+  }
+
+  finalOpening = Math.max(0, Math.min(gate.max_opening, finalOpening));
+
+  prepare(`UPDATE gates SET current_opening = ? WHERE id = ?`).run(finalOpening, gateId);
+
+  currentState.gateStates[gateId] = {
+    ...currentState.gateStates[gateId],
+    current_opening: finalOpening,
+    target_opening: finalOpening
+  };
+
+  return finalOpening;
+}
+
+function getGateWaterQualityRestriction(gateId) {
+  const restrictions = currentState.waterQualityRestrictions[gateId];
+  if (!restrictions || restrictions.length === 0) return null;
+  return {
+    active: true,
+    count: restrictions.length,
+    restrictedOpening: getEffectiveRestrictedOpening(gateId),
+    restrictions: restrictions.map(r => ({
+      id: r.id,
+      segmentId: r.segmentId,
+      eventId: r.eventId,
+      originalOpening: r.originalOpening,
+      restrictedOpening: r.restrictedOpening,
+      appliedAt: r.appliedAt
+    }))
+  };
 }
 
 function setGateTargetOpening(gateId, targetOpening) {
@@ -268,5 +393,9 @@ module.exports = {
   getGateLockInfo,
   lockGate,
   unlockGate,
-  getAllGateLocks
+  getAllGateLocks,
+  applyWaterQualityRestriction,
+  removeWaterQualityRestriction,
+  getGateWaterQualityRestriction,
+  getEffectiveRestrictedOpening
 };

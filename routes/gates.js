@@ -62,6 +62,7 @@ router.get('/:id', (req, res) => {
     const discharge = getSteadyStateDischarge(gate);
     
     const lockInfo = stateManager.getGateLockInfo(id);
+    const wqRestriction = stateManager.getGateWaterQualityRestriction(id);
     
     res.json({
       ...gate,
@@ -73,7 +74,8 @@ router.get('/:id', (req, res) => {
       upstreamPointId: upPoint?.id,
       downstreamPointId: downPoint?.id,
       locked: lockInfo.locked,
-      lockInfo: lockInfo
+      lockInfo: lockInfo,
+      waterQualityRestriction: wqRestriction
     });
   } catch (err) {
     console.error('Get gate error:', err);

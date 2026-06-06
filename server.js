@@ -22,10 +22,12 @@ const maintenanceRoutes = require('./routes/maintenance');
 const auditRoutes = require('./routes/audit');
 const billingRoutes = require('./routes/billing');
 const iceRoutes = require('./routes/ice');
+const waterQualityRoutes = require('./routes/waterQuality');
 const waterBalanceService = require('./services/waterBalanceService');
 const dispatchService = require('./services/dispatchService');
 const billingService = require('./services/billingService');
 const iceService = require('./services/iceService');
+const waterQualityService = require('./services/waterQualityService');
 const { initDemoEmergencyPlans, initLinkMonitorDemoData } = require('./models/initData');
 const { auditMiddleware } = require('./middleware/auditMiddleware');
 
@@ -70,6 +72,7 @@ app.use('/api/maintenance', maintenanceRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/ice', iceRoutes);
+app.use('/api/water-quality', waterQualityRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -125,6 +128,9 @@ async function startServer() {
     
     console.log('正在初始化冰期运行与防冻调度演示数据...');
     iceService.initIceDemoData();
+    
+    console.log('正在初始化水质监测与超标联动演示数据...');
+    waterQualityService.initWaterQualityDemoData();
     
     console.log('正在启动每小时用水量自动汇总...');
     billingService.startHourlyAggregation();
@@ -244,6 +250,14 @@ async function startServer() {
       console.log('  GET  /api/ice/hydraulic-adjustment - 各渠段冰期修正系数');
       console.log('  GET  /api/ice/recommendations - 防冻调度建议');
       console.log('  POST /api/ice/apply-recommendations - 执行防冻调度建议');
+      console.log('');
+      console.log('渠道水质监测与超标联动接口:');
+      console.log('  POST /api/water-quality/report - 上报水质数据(浊度/DO/pH)');
+      console.log('  GET  /api/water-quality/status - 所有渠段水质状态(normal/warning/alarm)');
+      console.log('  GET  /api/water-quality/status/:segmentId - 单渠段水质详情(测点值/超标项/超标时长)');
+      console.log('  GET  /api/water-quality/lockdowns - 当前因水质被限流的闸门列表');
+      console.log('  GET  /api/water-quality/events - 超标事件列表(可按渠段/时间过滤)');
+      console.log('  GET  /api/water-quality/events/:id - 事件详情(含期间水质时序)');
       console.log('');
     });
   } catch (err) {

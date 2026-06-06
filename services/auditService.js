@@ -11,7 +11,9 @@ const VALID_OPERATION_TYPES = [
   'emergency_simulate',
   'telemetry_batch',
   'operation_denied',
-  'ice_dispatch_apply'
+  'ice_dispatch_apply',
+  'water_quality_lockdown_apply',
+  'water_quality_lockdown_release'
 ];
 
 const WORK_START_HOUR = 8;

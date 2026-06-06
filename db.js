@@ -583,7 +583,8 @@ async function initDatabase() {
         'gate_adjust', 'gate_target_set', 'siltation_set',
         'maintenance_start', 'maintenance_complete',
         'dispatch_apply', 'emergency_execute', 'emergency_simulate',
-        'telemetry_batch', 'operation_denied', 'ice_dispatch_apply'
+        'telemetry_batch', 'operation_denied', 'ice_dispatch_apply',
+        'water_quality_lockdown_apply', 'water_quality_lockdown_release'
       )),
       operator TEXT NOT NULL DEFAULT 'system',
       target_id TEXT,
@@ -712,6 +713,80 @@ async function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_ice_dispatch_time ON ice_dispatch_records(timestamp);
+
+    CREATE TABLE IF NOT EXISTS water_quality_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      point_id TEXT NOT NULL,
+      segment_id TEXT NOT NULL,
+      turbidity REAL NOT NULL,
+      dissolved_oxygen REAL NOT NULL,
+      ph REAL NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('normal', 'warning', 'alarm')),
+      warning_items TEXT,
+      alarm_items TEXT,
+      timestamp INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_water_quality_records_point ON water_quality_records(point_id);
+    CREATE INDEX IF NOT EXISTS idx_water_quality_records_segment ON water_quality_records(segment_id);
+    CREATE INDEX IF NOT EXISTS idx_water_quality_records_time ON water_quality_records(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_water_quality_records_seg_time ON water_quality_records(segment_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_water_quality_records_status ON water_quality_records(status);
+
+    CREATE TABLE IF NOT EXISTS water_quality_segment_status (
+      segment_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'normal' CHECK(status IN ('normal', 'warning', 'alarm')),
+      peak_turbidity REAL,
+      peak_do REAL,
+      peak_ph REAL,
+      warning_items TEXT,
+      alarm_items TEXT,
+      first_alarm_at INTEGER,
+      last_updated INTEGER NOT NULL,
+      consecutive_normal_count INTEGER NOT NULL DEFAULT 0,
+      consecutive_alarm_count INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_water_quality_seg_status_status ON water_quality_segment_status(status);
+
+    CREATE TABLE IF NOT EXISTS water_quality_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      segment_id TEXT NOT NULL,
+      event_type TEXT NOT NULL CHECK(event_type IN ('warning', 'alarm')),
+      start_time INTEGER NOT NULL,
+      end_time INTEGER,
+      peak_turbidity REAL,
+      peak_do REAL,
+      peak_ph REAL,
+      peak_warning_items TEXT,
+      peak_alarm_items TEXT,
+      duration_seconds INTEGER,
+      lockdown_actions TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'resolved')),
+      resolved_at INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_water_quality_events_segment ON water_quality_events(segment_id);
+    CREATE INDEX IF NOT EXISTS idx_water_quality_events_status ON water_quality_events(status);
+    CREATE INDEX IF NOT EXISTS idx_water_quality_events_time ON water_quality_events(start_time);
+    CREATE INDEX IF NOT EXISTS idx_water_quality_events_seg_time ON water_quality_events(segment_id, start_time);
+
+    CREATE TABLE IF NOT EXISTS water_quality_lockdowns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      segment_id TEXT NOT NULL,
+      gate_id TEXT NOT NULL,
+      event_id INTEGER,
+      original_opening REAL NOT NULL,
+      restricted_opening REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'released')),
+      applied_at INTEGER NOT NULL,
+      released_at INTEGER,
+      release_reason TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_water_quality_lockdowns_gate ON water_quality_lockdowns(gate_id);
+    CREATE INDEX IF NOT EXISTS idx_water_quality_lockdowns_segment ON water_quality_lockdowns(segment_id);
+    CREATE INDEX IF NOT EXISTS idx_water_quality_lockdowns_status ON water_quality_lockdowns(status);
   `);
   
   saveDatabase();
