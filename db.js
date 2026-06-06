@@ -575,6 +575,30 @@ async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_maintenance_plans_status ON maintenance_plans(status);
     CREATE INDEX IF NOT EXISTS idx_maintenance_plans_segment ON maintenance_plans(segment_id);
     CREATE INDEX IF NOT EXISTS idx_maintenance_plans_start_time ON maintenance_plans(plan_start_time);
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      operation_type TEXT NOT NULL CHECK(operation_type IN (
+        'gate_adjust', 'siltation_set', 'maintenance_start', 'maintenance_complete',
+        'dispatch_apply', 'emergency_execute', 'telemetry_batch', 'operation_denied'
+      )),
+      operator TEXT NOT NULL DEFAULT 'system',
+      target_id TEXT,
+      before_state TEXT,
+      after_state TEXT,
+      source_ip TEXT,
+      request_body TEXT,
+      response_status INTEGER,
+      response_body TEXT,
+      denied_reason TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_type ON audit_logs(operation_type);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_operator ON audit_logs(operator);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_type_time ON audit_logs(operation_type, timestamp);
   `);
   
   saveDatabase();

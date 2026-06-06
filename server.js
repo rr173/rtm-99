@@ -19,9 +19,11 @@ const emergencyRoutes = require('./routes/emergency');
 const linkMonitorRoutes = require('./routes/linkMonitor');
 const dispatchRoutes = require('./routes/dispatch');
 const maintenanceRoutes = require('./routes/maintenance');
+const auditRoutes = require('./routes/audit');
 const waterBalanceService = require('./services/waterBalanceService');
 const dispatchService = require('./services/dispatchService');
 const { initDemoEmergencyPlans, initLinkMonitorDemoData } = require('./models/initData');
+const { auditMiddleware } = require('./middleware/auditMiddleware');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -36,6 +38,8 @@ app.use((req, res, next) => {
   console.log(`${req.method} ${req.url}`);
   next();
 });
+
+app.use(auditMiddleware);
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -59,6 +63,7 @@ app.use('/api/emergency', emergencyRoutes);
 app.use('/api/link-monitor', linkMonitorRoutes);
 app.use('/api/dispatch', dispatchRoutes);
 app.use('/api/maintenance', maintenanceRoutes);
+app.use('/api/audit', auditRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -195,6 +200,13 @@ async function startServer() {
       console.log('  PUT  /api/maintenance/plans/:id/start - 开始维护(联动闸门)');
       console.log('  PUT  /api/maintenance/plans/:id/complete - 完成维护(恢复闸门)');
       console.log('  GET  /api/maintenance/impact/:segmentId?durationHours= - 预评估停水影响');
+      console.log('');
+      console.log('操作审计接口:');
+      console.log('  GET  /api/audit/logs - 分页查询审计日志');
+      console.log('  GET  /api/audit/logs/:id - 单条日志详情(含状态快照)');
+      console.log('  GET  /api/audit/summary - 操作统计汇总');
+      console.log('  GET  /api/audit/trail/:targetId - 操作目标完整轨迹');
+      console.log('  GET  /api/audit/report - 结构化审计报告');
       console.log('');
     });
   } catch (err) {
