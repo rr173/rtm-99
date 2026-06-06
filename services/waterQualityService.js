@@ -86,23 +86,27 @@ function getDownstreamDiversionGates(segmentId) {
 }
 
 function applyGateLockdown(segmentId, eventId, gate, operator = 'system') {
-  const activeLockdown = prepare(
-    `SELECT * FROM water_quality_lockdowns WHERE gate_id = ? AND status = 'active'`
-  ).get(gate.id);
-  if (activeLockdown) {
-    return null;
+  if (eventId != null) {
+    const activeLockdownForEvent = prepare(
+      `SELECT * FROM water_quality_lockdowns WHERE gate_id = ? AND event_id = ? AND status = 'active'`
+    ).get(gate.id, eventId);
+    if (activeLockdownForEvent) {
+      return null;
+    }
   }
 
   const originalOpening = gate.current_opening;
   const restrictedOpening = originalOpening / 2;
-
-  const finalOpening = stateManager.applyWaterQualityRestriction(gate.id, restrictedOpening, originalOpening);
 
   const lockdownResult = prepare(`
     INSERT INTO water_quality_lockdowns
     (segment_id, gate_id, event_id, original_opening, restricted_opening, status, applied_at)
     VALUES (?, ?, ?, ?, ?, 'active', ?)
   `).run(segmentId, gate.id, eventId || null, originalOpening, restrictedOpening, Date.now());
+
+  const lockdownId = lockdownResult.lastInsertRowid;
+
+  const finalOpening = stateManager.applyWaterQualityRestriction(gate.id, restrictedOpening, originalOpening, lockdownId);
 
   const beforeState = { gateId: gate.id, opening: originalOpening };
   const afterState = { gateId: gate.id, opening: finalOpening, restrictedOpening };
@@ -122,13 +126,13 @@ function applyGateLockdown(segmentId, eventId, gate, operator = 'system') {
       finalOpening
     },
     responseStatus: 200,
-    responseBody: { success: true, lockdownId: lockdownResult.lastInsertRowid }
+    responseBody: { success: true, lockdownId }
   });
 
   saveDatabase();
 
   return {
-    id: lockdownResult.lastInsertRowid,
+    id: lockdownId,
     gateId: gate.id,
     gateName: gate.name,
     originalOpening,
@@ -148,7 +152,7 @@ function releaseGateLockdown(lockdownId, reason, operator = 'system') {
 
   const beforeOpening = gate.current_opening;
 
-  const finalOpening = stateManager.removeWaterQualityRestriction(lockdown.gate_id, lockdown.original_opening);
+  const finalOpening = stateManager.removeWaterQualityRestriction(lockdown.gate_id, lockdown.original_opening, parseInt(lockdownId));
 
   prepare(`
     UPDATE water_quality_lockdowns
@@ -750,7 +754,9 @@ function getEventList(filters = {}) {
     status: row.status,
     startTime: row.start_time,
     endTime: row.end_time,
-    durationSeconds: row.end_time ? row.end_time - row.start_time : Date.now() - row.start_time,
+    durationSeconds: row.end_time
+      ? Math.floor((row.end_time - row.start_time) / 1000)
+      : Math.floor((Date.now() - row.start_time) / 1000),
     peakTurbidity: row.peak_turbidity,
     peakDo: row.peak_do,
     peakPh: row.peak_ph,
@@ -939,15 +945,15 @@ function initWaterQualityDemoData() {
         const originalOpening = gate.current_opening;
         const restrictedOpening = originalOpening / 2;
 
-        const finalOpening = stateManager.applyWaterQualityRestriction(
-          gate.id, restrictedOpening, originalOpening
-        );
-
         const ldInsert = prepare(`
           INSERT INTO water_quality_lockdowns
           (segment_id, gate_id, event_id, original_opening, restricted_opening, status, applied_at)
           VALUES (?, ?, ?, ?, ?, 'active', ?)
         `).run(seg.id, gate.id, eventInsert.lastInsertRowid, originalOpening, restrictedOpening, now - 25 * 60 * 1000);
+
+        const finalOpening = stateManager.applyWaterQualityRestriction(
+          gate.id, restrictedOpening, originalOpening, ldInsert.lastInsertRowid
+        );
 
         lockdownActions.push({
           lockdownId: ldInsert.lastInsertRowid,

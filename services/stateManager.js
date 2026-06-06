@@ -211,7 +211,7 @@ function updateGateOpening(gateId, newOpening) {
   return clampedOpening;
 }
 
-function applyWaterQualityRestriction(gateId, restrictedOpening, originalOpening) {
+function applyWaterQualityRestriction(gateId, restrictedOpening, originalOpening, lockdownId = null) {
   if (!currentState.waterQualityRestrictions[gateId]) {
     currentState.waterQualityRestrictions[gateId] = [];
   }
@@ -220,13 +220,15 @@ function applyWaterQualityRestriction(gateId, restrictedOpening, originalOpening
   if (!gate) return null;
 
   const existing = currentState.waterQualityRestrictions[gateId];
-  const conflict = existing.find(r => Math.abs(r.restrictedOpening - restrictedOpening) < 0.001);
-  if (conflict) {
-    return gate.current_opening;
+  if (lockdownId != null) {
+    const conflict = existing.find(r => r.id === lockdownId);
+    if (conflict) {
+      return gate.current_opening;
+    }
   }
 
   existing.push({
-    id: Date.now(),
+    id: lockdownId != null ? lockdownId : Date.now(),
     segmentId: null,
     eventId: null,
     originalOpening,
@@ -248,14 +250,21 @@ function applyWaterQualityRestriction(gateId, restrictedOpening, originalOpening
   return finalOpening;
 }
 
-function removeWaterQualityRestriction(gateId, originalOpening) {
+function removeWaterQualityRestriction(gateId, originalOpening, lockdownId = null) {
   const restrictions = currentState.waterQualityRestrictions[gateId];
   if (!restrictions || restrictions.length === 0) {
     const gate = prepare('SELECT * FROM gates WHERE id = ?').get(gateId);
     return gate ? gate.current_opening : null;
   }
 
-  restrictions.pop();
+  if (lockdownId != null) {
+    const idx = restrictions.findIndex(r => r.id === lockdownId);
+    if (idx !== -1) {
+      restrictions.splice(idx, 1);
+    }
+  } else {
+    restrictions.pop();
+  }
 
   const gate = prepare('SELECT * FROM gates WHERE id = ?').get(gateId);
   if (!gate) return null;

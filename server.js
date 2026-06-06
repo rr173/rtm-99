@@ -132,6 +132,9 @@ async function startServer() {
     console.log('正在初始化水质监测与超标联动演示数据...');
     waterQualityService.initWaterQualityDemoData();
     
+    console.log('正在重新加载运行状态(含水质限流)...');
+    require('./services/stateManager').initState();
+    
     console.log('正在启动每小时用水量自动汇总...');
     billingService.startHourlyAggregation();
     
