@@ -4,6 +4,7 @@ const { prepare } = require('../db');
 const stateManager = require('../services/stateManager');
 const hydraulicEngine = require('../services/hydraulicEngine');
 const siltationService = require('../services/siltationService');
+const iceService = require('../services/iceService');
 
 router.put('/:id/siltation', (req, res) => {
   try {
@@ -50,12 +51,16 @@ router.get('/', (req, res) => {
 
     const underConstructionIds = siltationService.getUnderConstructionSegmentIds();
 
-    const segmentsForHydraulics = segments.map(seg => {
+    let segmentsForHydraulics = segments.map(seg => {
       if (underConstructionIds.includes(seg.id)) {
         return { ...seg, siltation_depth: seg.design_water_level };
       }
       return seg;
     });
+
+    segmentsForHydraulics = iceService.applyIceAdjustmentsToSegments(segmentsForHydraulics);
+
+    const iceAdjustments = iceService.getHydraulicAdjustments();
 
     const firstGate = gates.find(g => g.position_on_segment <= 0.01 && g.canal_segment_id === segments[0].id);
     let headwaterDepth = 2.5;
@@ -80,10 +85,15 @@ router.get('/', (req, res) => {
       const Qcap = siltationService.getCapacityFlow(seg, sd);
       const capacityRatio = Qdesign > 0 ? Qcap / Qdesign : 1;
       const ss = steadyState[seg.id];
+      const iceAdj = iceAdjustments.adjustments.find(a => a.segmentId === seg.id);
       
       return {
         ...seg,
         siltationDepth: sd,
+        iceThickness: iceAdj ? iceAdj.iceThickness : 0,
+        iceStatus: iceAdj ? iceAdj.status : 'normal',
+        manningMultiplier: iceAdj ? iceAdj.manningMultiplier : 1.0,
+        effectiveCrossSectionRatio: iceAdj ? iceAdj.effectiveCrossSectionRatio : 1.0,
         effectiveBottomElevation: seg.bottom_elevation + sd,
         constructionStatus: underConstructionIds.includes(seg.id) ? '施工中' : '正常运行',
         capacityRatio: Math.round(capacityRatio * 10000) / 10000,

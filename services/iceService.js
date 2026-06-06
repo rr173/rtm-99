@@ -375,22 +375,38 @@ function getRecommendations() {
         segments[segments.findIndex(s => s.id === seg.id) - 1].id === g.canal_segment_id));
 
     const gateAdjustments = [];
+    let canSatisfy = !needsAdjustment;
     for (const gate of segGates) {
       if (gate.type === 'regulator' && gate.position_on_segment <= 0.01) {
         const currentOpening = gate.current_opening;
         const gateSs = steadyState[seg.id];
         const currentGateFlow = gateSs ? gateSs.flow : 0;
         let suggestedOpening = currentOpening;
+        let atMax = false;
 
         if (needsAdjustment && currentGateFlow > 0) {
           const ratio = Math.sqrt((currentGateFlow + flowDeficit) / currentGateFlow);
-          suggestedOpening = Math.min(gate.max_opening, currentOpening * ratio);
+          const targetOpening = currentOpening * ratio;
+          suggestedOpening = Math.min(gate.max_opening, targetOpening);
+          if (targetOpening > gate.max_opening) {
+            atMax = true;
+          }
         } else if (needsAdjustment) {
-          suggestedOpening = Math.min(gate.max_opening, currentOpening * 1.2);
+          const targetOpening = currentOpening * 1.2;
+          suggestedOpening = Math.min(gate.max_opening, targetOpening);
+          if (targetOpening > gate.max_opening) {
+            atMax = true;
+          }
         }
 
-        const direction = suggestedOpening > currentOpening ? 'increase' :
-          suggestedOpening < currentOpening ? 'decrease' : 'maintain';
+        const direction = suggestedOpening > currentOpening + 0.001 ? 'increase' :
+          suggestedOpening < currentOpening - 0.001 ? 'decrease' : 'maintain';
+
+        if (direction === 'maintain' && needsAdjustment) {
+          canSatisfy = canSatisfy || false;
+        } else if (direction === 'increase' && !atMax) {
+          canSatisfy = true;
+        }
 
         if (direction !== 'maintain' || needsAdjustment) {
           gateAdjustments.push({
@@ -398,12 +414,23 @@ function getRecommendations() {
             gateName: gate.name,
             currentOpening: currentOpening,
             suggestedOpening: Math.round(suggestedOpening * 1000) / 1000,
+            maxOpening: gate.max_opening,
             adjustmentDirection: direction,
             adjustmentMagnitude: Math.round((suggestedOpening - currentOpening) * 1000) / 1000,
-            adjustmentPercentage: Math.round(((suggestedOpening - currentOpening) / Math.max(0.001, currentOpening)) * 100)
+            adjustmentPercentage: Math.round(((suggestedOpening - currentOpening) / Math.max(0.001, currentOpening)) * 100),
+            atMaxOpening: atMax || (Math.abs(suggestedOpening - gate.max_opening) < 0.001)
           });
         }
       }
+    }
+
+    let recommendationText;
+    if (!needsAdjustment) {
+      recommendationText = '当前流量满足防冻流速要求';
+    } else if (canSatisfy) {
+      recommendationText = `建议加大上游来水量,增加流速防止冰塞。流量缺口约 ${Math.round(flowDeficit * 1000) / 1000} m³/s`;
+    } else {
+      recommendationText = `警告: 当前闸门全开仍无法满足最小防冻流速 ${minFlowInfo.minVelocity} m/s 要求,流量缺口约 ${Math.round(flowDeficit * 1000) / 1000} m³/s,建议采取临时破冰或增加上游水源等额外防冻措施`;
     }
 
     recommendations.push({
@@ -419,9 +446,8 @@ function getRecommendations() {
       requiredMinVelocity: minFlowInfo.minVelocity,
       flowDeficit: Math.round(flowDeficit * 1000) / 1000,
       needsAdjustment: needsAdjustment,
-      recommendation: needsAdjustment
-        ? `建议加大上游来水量,增加流速防止冰塞。流量缺口约 ${Math.round(flowDeficit * 1000) / 1000} m³/s`
-        : '当前流量满足防冻流速要求',
+      canSatisfyMinVelocity: canSatisfy,
+      recommendation: recommendationText,
       gateAdjustments: gateAdjustments
     });
   }
