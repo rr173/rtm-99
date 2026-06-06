@@ -527,6 +527,7 @@ async function initDatabase() {
       verified_at INTEGER,
       closed_at INTEGER,
       escalation_count INTEGER NOT NULL DEFAULT 0,
+      last_escalated_at INTEGER,
       notes TEXT,
       FOREIGN KEY (anomaly_id) REFERENCES patrol_anomalies(id),
       FOREIGN KEY (segment_id) REFERENCES canal_segments(id)
@@ -557,6 +558,11 @@ async function initDatabase() {
   
   try {
     db.exec(`ALTER TABLE canal_segments ADD COLUMN siltation_depth REAL NOT NULL DEFAULT 0`);
+    saveDatabase();
+  } catch (e) {}
+
+  try {
+    db.exec(`ALTER TABLE patrol_work_orders ADD COLUMN last_escalated_at INTEGER`);
     saveDatabase();
   } catch (e) {}
 }

@@ -345,6 +345,22 @@ router.get('/work-orders/:id/timeline', (req, res) => {
   }
 });
 
+router.put('/work-orders/:id/start', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { operator } = req.body;
+
+    const result = patrolService.startWorkOrder(parseInt(id), operator);
+    res.json({
+      success: true,
+      work_order: result
+    });
+  } catch (err) {
+    console.error('Start work order error:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 router.put('/work-orders/:id/process', (req, res) => {
   try {
     const { id } = req.params;

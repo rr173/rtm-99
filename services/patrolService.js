@@ -660,14 +660,37 @@ function getWorkOrderList(filters = {}) {
   };
 }
 
+function startWorkOrder(id, operator) {
+  const woId = parseInt(id);
+  const wo = prepare('SELECT * FROM patrol_work_orders WHERE id = ?').get(woId);
+  if (!wo) {
+    throw new Error('工单不存在');
+  }
+  if (wo.status !== 'assigned') {
+    throw new Error('只有已指派的工单才能开始处理,当前状态:' + wo.status);
+  }
+
+  const now = Date.now();
+  prepare(`
+    UPDATE patrol_work_orders 
+    SET status = 'processing'
+    WHERE id = ?
+  `).run(woId);
+
+  addTimelineEntry(woId, 'assigned', 'processing', operator || wo.handler_name, 
+    '处理人开始处理');
+
+  return getWorkOrderDetail(woId);
+}
+
 function processWorkOrder(id, description, measures, operator) {
   const woId = parseInt(id);
   const wo = prepare('SELECT * FROM patrol_work_orders WHERE id = ?').get(woId);
   if (!wo) {
     throw new Error('工单不存在');
   }
-  if (wo.status !== 'assigned' && wo.status !== 'processing') {
-    throw new Error('工单状态不允许处理,当前状态:' + wo.status);
+  if (wo.status !== 'processing') {
+    throw new Error('工单状态不允许提交处理结果,请先开始处理,当前状态:' + wo.status);
   }
   if (!description || typeof description !== 'string' || description.trim().length === 0) {
     throw new Error('处理描述不能为空');
@@ -677,15 +700,13 @@ function processWorkOrder(id, description, measures, operator) {
   }
 
   const now = Date.now();
-  const prevStatus = wo.status;
-
   prepare(`
     UPDATE patrol_work_orders 
     SET status = 'verifying', process_description = ?, process_measures = ?, processed_at = ?
     WHERE id = ?
   `).run(description, measures, now, woId);
 
-  addTimelineEntry(woId, prevStatus, 'verifying', operator || wo.handler_name, 
+  addTimelineEntry(woId, 'processing', 'verifying', operator || wo.handler_name, 
     '提交处理结果,等待验收');
 
   return getWorkOrderDetail(woId);
@@ -759,10 +780,20 @@ function reprocessWorkOrder(id, description, measures, operator) {
   return getWorkOrderDetail(woId);
 }
 
-function escalateSeverity(current) {
-  if (current === 'low') return 'medium';
-  if (current === 'medium') return 'high';
-  return 'high';
+const SEVERITY_LEVEL = { low: 0, medium: 1, high: 2 };
+const SEVERITY_BY_LEVEL = ['low', 'medium', 'high'];
+const ESCALATION_INTERVAL_MS = 12 * 60 * 60 * 1000;
+
+function calculateTargetSeverity(overdueHours, currentLevel) {
+  let targetLevel = currentLevel;
+  if (overdueHours >= 48) {
+    targetLevel = 2;
+  } else if (overdueHours >= 24) {
+    targetLevel = Math.max(currentLevel, 1);
+  } else if (overdueHours >= 12) {
+    targetLevel = Math.max(currentLevel, 1);
+  }
+  return Math.min(targetLevel, 2);
 }
 
 function getOverdueWorkOrders() {
@@ -781,22 +812,31 @@ function getOverdueWorkOrders() {
   `).all(now);
 
   for (const wo of overdue) {
-    const newSeverity = escalateSeverity(wo.anomaly_severity);
-    if (newSeverity !== wo.anomaly_severity) {
-      const escalationNote = `超时自动升级: ${wo.anomaly_severity} -> ${newSeverity}`;
-      prepare(`
-        UPDATE patrol_work_orders 
-        SET anomaly_severity = ?, 
-            escalation_count = escalation_count + 1,
-            notes = COALESCE(notes || '; ', '') || ?
-        WHERE id = ?
-      `).run(newSeverity, escalationNote + ' @ ' + new Date(now).toISOString(), wo.id);
+    const overdueMs = now - wo.deadline;
+    const overdueHours = overdueMs / 3600000;
+    const currentLevel = SEVERITY_LEVEL[wo.anomaly_severity] || 0;
+    const targetLevel = calculateTargetSeverity(overdueHours, currentLevel);
 
-      addTimelineEntry(wo.id, wo.status, wo.status, 'system', escalationNote);
+    if (targetLevel <= currentLevel) continue;
 
-      wo.anomaly_severity = newSeverity;
-      wo.escalation_count = (wo.escalation_count || 0) + 1;
-    }
+    const lastEscalated = wo.last_escalated_at || 0;
+    if (now - lastEscalated < ESCALATION_INTERVAL_MS) continue;
+
+    const nextLevel = Math.min(currentLevel + 1, targetLevel, 2);
+    const newSeverity = SEVERITY_BY_LEVEL[nextLevel];
+    const oldSeverity = wo.anomaly_severity;
+    const escalationNote = `超时自动升级(${Math.round(overdueHours)}h): ${oldSeverity} -> ${newSeverity}`;
+
+    prepare(`
+      UPDATE patrol_work_orders 
+      SET anomaly_severity = ?, 
+          escalation_count = escalation_count + 1,
+          last_escalated_at = ?,
+          notes = COALESCE(notes || '; ', '') || ?
+      WHERE id = ?
+    `).run(newSeverity, now, escalationNote + ' @ ' + new Date(now).toISOString(), wo.id);
+
+    addTimelineEntry(wo.id, wo.status, wo.status, 'system', escalationNote);
   }
 
   const refreshed = prepare(`
@@ -812,9 +852,14 @@ function getOverdueWorkOrders() {
     ORDER BY pwo.deadline ASC
   `).all(now);
 
+  const result = refreshed.map(wo => ({
+    ...wo,
+    overdue_hours: Math.round(((now - wo.deadline) / 3600000) * 100) / 100
+  }));
+
   return {
-    total: refreshed.length,
-    overdue_work_orders: refreshed
+    total: result.length,
+    overdue_work_orders: result
   };
 }
 
@@ -1373,6 +1418,7 @@ module.exports = {
   assignWorkOrders,
   getWorkOrderList,
   getWorkOrderDetail,
+  startWorkOrder,
   processWorkOrder,
   verifyWorkOrder,
   reprocessWorkOrder,
